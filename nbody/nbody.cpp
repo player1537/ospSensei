@@ -66,6 +66,44 @@ void bodyForce(const Bodies &bodies, float dt, size_t n) {
 }
 
 
+class OSPRayStudioPointsVisualization : public AnalysisAdapter {
+public:
+  bool Execute(DataAdaptor *data) override;
+  int Finalize() override;
+
+private:
+};
+
+bool OSPRayStudioPointsVisualization::Execute(DataAdaptor *data) {
+  vtkDataObject *dataObject;
+  if (data->GetMesh("bodies", /*structureOnly=*/false, dataObject)) {
+    SENSEI_ERROR("Failed to get mesh 'bodies'")//no semicolon
+    return /*success=*/false;
+  }
+
+  vtkPolyData *polyData;
+  polyData = dynamic_cast<vtkPolyData *>(dataObject);
+  if (!polyData) {
+    SENSEI_ERROR("Expected mesh 'bodies' to be a vtkPolyData")//no semicolon
+    return /*success=*/false;
+  }
+
+  if (data->AddArray(dataObject, "bodies", vtkDataObject::POINT, "position")) {
+    SENSEI_ERROR("Failed to get array 'position' from mesh 'bodies'")//no semicolon
+    return /*success=*/false;
+  }
+
+  vtkAbstractArray *abstractArray;
+  abstractArray = polyData->GetPointData()->GetAbstractArray("position");
+
+  return /*success=*/true;
+}
+
+int OSPRayStudioPointsVisualization::Finalize() {
+  return 0; // no error
+}
+
+
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
 
@@ -106,10 +144,6 @@ int main(int argc, char** argv) {
     floatArrayPos->SetNumberOfComponents(3);
     floatArrayPos->SetArray((float *)bodies.pos, 3 * nBodies, /*save=*/0);
 
-    vtkNew<vtkPoints> points;
-    points->Initialize();
-    points->SetData(floatArrayPos);
-
     vtkNew<vtkFloatArray> floatArrayVel;
     floatArrayVel->Initialize();
     floatArrayVel->SetName("velocity");
@@ -118,7 +152,7 @@ int main(int argc, char** argv) {
 
     vtkNew<vtkPolyData> polyData;
     polyData->Initialize();
-    polyData->SetPoints(points);
+    polyData->GetPointData()->AddArray(floatArrayPos);
     polyData->GetPointData()->AddArray(floatArrayVel);
 
     vtkNew<sensei::VTKDataAdaptor> vtkDataAdaptor;
