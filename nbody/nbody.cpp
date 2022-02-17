@@ -27,6 +27,7 @@ typedef struct {
 } Point;
 
 typedef struct {
+  size_t count;
   Point *pos;
   Point *vel;
 } Bodies;
@@ -68,11 +69,33 @@ void bodyForce(const Bodies &bodies, float dt, size_t n) {
 
 class OSPRayStudioPointsVisualization : public AnalysisAdapter {
 public:
-  bool Execute(DataAdaptor *data) override;
+  void Initialize();
+
+  void SetRootNode(const ospray::sg::NodePtr &root) {
+    m_root = root;
+  }
+
+  void SetScheduler(const ospray::sg::SchedulerPtr &scheduler) {
+    m_scheduler = scheduler;
+  }
+
+  bool Execute(DataAdaptor *) override;
   int Finalize() override;
 
 private:
+  bool Execute(const Bodies &) override;
+
+  ospray::sg::NodePtr m_root;
+  ospray::sg::SchedulerPtr m_scheduler;
+
+  ospray::sg::NodePtr m_xfm;
+  ospray::sg::NodePtr m_sphere;
 };
+
+void OSPRayStudioPointsVisualization::Initialize() {
+  m_xfm = createNode("sensei_ospv_xfm", "transform");
+  m_sphere = createNode("sensei_ospv_sphere", "sphere");
+}
 
 bool OSPRayStudioPointsVisualization::Execute(DataAdaptor *data) {
   vtkDataObject *dataObject;
@@ -96,6 +119,47 @@ bool OSPRayStudioPointsVisualization::Execute(DataAdaptor *data) {
   vtkAbstractArray *abstractArray;
   abstractArray = polyData->GetPointData()->GetAbstractArray("position");
 
+  vtkFloatArray *floatArray;
+  if (!(floatArray = vtkFloatArray.SafeDownCast(abstractArray))) {
+    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' to be a vtkFloatArray")//no semicolon
+    return /*success=*/false;
+  }
+
+  size_t nComponents = floatArray->GetNumberOfComponents();
+  if (nComponents != 3) {
+    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' to be a vtkFloatArray with 3 components")//no semicolon
+    return /*success=*/false;
+  }
+
+  if (!floatArray->HasStandardMemoryLayout()) {
+    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' to be a vtkFloatArray with 3 components and standard memory layout")//no semicolon
+    return /*success=*/false;
+  }
+
+  size_t nBodies = floatArray->GetNumberOfTuples();
+
+  Bodies bodies;
+  bodies.pos = (Point *)floatArray->GetPointer(0);
+
+  return /*success=*/Execute(bodies);
+}
+
+bool OSPRayStudioPointsVisualization::Execute(const Bodies &bodies) {
+  OSPData sharedData;
+  sharedData = ospNewSharedData((void *)bodies.pos, OSP_FLOAT, bodies.count);
+  ospCommit(sharedData);
+
+  OSPData data;
+  data = ospNewData(OSP_VEC3F, bodies.count);
+  ospCopyData(sharedData, data);
+  ospCommit(data);
+  ospRelease(sharedData);
+
+  OSPGeometry sphere;
+  sphere = ospNewGeometry("sphere");
+  ospSetObject(sphere, "sphere.position", data);
+  ospCommit(sphere);
+
   return /*success=*/true;
 }
 
@@ -117,6 +181,7 @@ int main(int argc, char** argv) {
   if (argc > 4 && argv[4][0] != '\0') configFilename = argv[4];
 
   Bodies bodies;
+  bodies.count = nBodies;
   bodies.pos = (Point *)malloc(nBodies * sizeof(*bodies.pos));
   bodies.vel = (Point *)malloc(nBodies * sizeof(*bodies.vel));
 
@@ -144,6 +209,10 @@ int main(int argc, char** argv) {
     floatArrayPos->SetNumberOfComponents(3);
     floatArrayPos->SetArray((float *)bodies.pos, 3 * nBodies, /*save=*/0);
 
+    vtkNew<vtkPoints> points;
+    points->Initialize();
+    points->SetData(floatArrayPos);
+
     vtkNew<vtkFloatArray> floatArrayVel;
     floatArrayVel->Initialize();
     floatArrayVel->SetName("velocity");
@@ -152,7 +221,7 @@ int main(int argc, char** argv) {
 
     vtkNew<vtkPolyData> polyData;
     polyData->Initialize();
-    polyData->GetPointData()->AddArray(floatArrayPos);
+    polyData->AddPoints(points);
     polyData->GetPointData()->AddArray(floatArrayVel);
 
     vtkNew<sensei::VTKDataAdaptor> vtkDataAdaptor;
@@ -174,3 +243,5 @@ int main(int argc, char** argv) {
 
   return 0;
 }
+
+// vim: ts=2:sts=2
