@@ -19,6 +19,9 @@
 #include <vtkPoints.h>
 #include <vtkPolyData.h>
 
+// plugin_sensei
+#include <plugin_sensei/OSPRayStudioVisualization.h>
+
 #define SOFTENING 1e-9f
 
 
@@ -67,109 +70,11 @@ void bodyForce(const Bodies &bodies, float dt, size_t n) {
 }
 
 
-class OSPRayStudioPointsVisualization : public AnalysisAdapter {
-public:
-  void Initialize();
-
-  void SetRootNode(const ospray::sg::NodePtr &root) {
-    m_root = root;
-  }
-
-  void SetScheduler(const ospray::sg::SchedulerPtr &scheduler) {
-    m_scheduler = scheduler;
-  }
-
-  bool Execute(DataAdaptor *) override;
-  int Finalize() override;
-
-private:
-  bool Execute(const Bodies &) override;
-
-  ospray::sg::NodePtr m_root;
-  ospray::sg::SchedulerPtr m_scheduler;
-
-  ospray::sg::NodePtr m_xfm;
-  ospray::sg::NodePtr m_sphere;
-};
-
-void OSPRayStudioPointsVisualization::Initialize() {
-  m_xfm = createNode("sensei_ospv_xfm", "transform");
-  m_sphere = createNode("sensei_ospv_sphere", "sphere");
-}
-
-bool OSPRayStudioPointsVisualization::Execute(DataAdaptor *data) {
-  vtkDataObject *dataObject;
-  if (data->GetMesh("bodies", /*structureOnly=*/false, dataObject)) {
-    SENSEI_ERROR("Failed to get mesh 'bodies'")//no semicolon
-    return /*success=*/false;
-  }
-
-  vtkPolyData *polyData;
-  polyData = dynamic_cast<vtkPolyData *>(dataObject);
-  if (!polyData) {
-    SENSEI_ERROR("Expected mesh 'bodies' to be a vtkPolyData")//no semicolon
-    return /*success=*/false;
-  }
-
-  if (data->AddArray(dataObject, "bodies", vtkDataObject::POINT, "position")) {
-    SENSEI_ERROR("Failed to get array 'position' from mesh 'bodies'")//no semicolon
-    return /*success=*/false;
-  }
-
-  vtkAbstractArray *abstractArray;
-  abstractArray = polyData->GetPointData()->GetAbstractArray("position");
-
-  vtkFloatArray *floatArray;
-  if (!(floatArray = vtkFloatArray.SafeDownCast(abstractArray))) {
-    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' to be a vtkFloatArray")//no semicolon
-    return /*success=*/false;
-  }
-
-  size_t nComponents = floatArray->GetNumberOfComponents();
-  if (nComponents != 3) {
-    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' to be a vtkFloatArray with 3 components")//no semicolon
-    return /*success=*/false;
-  }
-
-  if (!floatArray->HasStandardMemoryLayout()) {
-    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' to be a vtkFloatArray with 3 components and standard memory layout")//no semicolon
-    return /*success=*/false;
-  }
-
-  size_t nBodies = floatArray->GetNumberOfTuples();
-
-  Bodies bodies;
-  bodies.pos = (Point *)floatArray->GetPointer(0);
-
-  return /*success=*/Execute(bodies);
-}
-
-bool OSPRayStudioPointsVisualization::Execute(const Bodies &bodies) {
-  OSPData sharedData;
-  sharedData = ospNewSharedData((void *)bodies.pos, OSP_FLOAT, bodies.count);
-  ospCommit(sharedData);
-
-  OSPData data;
-  data = ospNewData(OSP_VEC3F, bodies.count);
-  ospCopyData(sharedData, data);
-  ospCommit(data);
-  ospRelease(sharedData);
-
-  OSPGeometry sphere;
-  sphere = ospNewGeometry("sphere");
-  ospSetObject(sphere, "sphere.position", data);
-  ospCommit(sphere);
-
-  return /*success=*/true;
-}
-
-int OSPRayStudioPointsVisualization::Finalize() {
-  return 0; // no error
-}
-
-
 int main(int argc, char** argv) {
-  MPI_Init(&argc, &argv);
+  if (MPI_SUCCESS != MPI_Init(&argc, &argv)) {
+    SENSEI_ERROR("MPI_Init failed")//no semicolon
+    return 1;
+  }
 
   size_t nBodies = 30000;
   size_t nIters = 10;
@@ -182,8 +87,8 @@ int main(int argc, char** argv) {
 
   Bodies bodies;
   bodies.count = nBodies;
-  bodies.pos = (Point *)malloc(nBodies * sizeof(*bodies.pos));
-  bodies.vel = (Point *)malloc(nBodies * sizeof(*bodies.vel));
+  bodies.pos = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.pos)));
+  bodies.vel = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.vel)));
 
   randomize(bodies.pos, nBodies);
   randomize(bodies.vel, nBodies);
@@ -193,6 +98,7 @@ int main(int argc, char** argv) {
   analysisAdaptor->Initialize(configFilename);
 
   for (int iter = 0; iter <= nIters; ++iter) {
+    SENSEI_STATUS("On iteration " << iter)//no semicolon
     if (iter > 0) {
       bodyForce(bodies, dt, nBodies); // compute interbody forces
 
@@ -207,7 +113,7 @@ int main(int argc, char** argv) {
     floatArrayPos->Initialize();
     floatArrayPos->SetName("position");
     floatArrayPos->SetNumberOfComponents(3);
-    floatArrayPos->SetArray((float *)bodies.pos, 3 * nBodies, /*save=*/0);
+    floatArrayPos->SetArray((float *)bodies.pos, 3 * nBodies, /*save=*/1);
 
     vtkNew<vtkPoints> points;
     points->Initialize();
@@ -217,11 +123,11 @@ int main(int argc, char** argv) {
     floatArrayVel->Initialize();
     floatArrayVel->SetName("velocity");
     floatArrayVel->SetNumberOfComponents(3);
-    floatArrayVel->SetArray((float *)bodies.vel, 3 * nBodies, /*save=*/0);
+    floatArrayVel->SetArray((float *)bodies.vel, 3 * nBodies, /*save=*/1);
 
     vtkNew<vtkPolyData> polyData;
     polyData->Initialize();
-    polyData->AddPoints(points);
+    polyData->SetPoints(points);
     polyData->GetPointData()->AddArray(floatArrayVel);
 
     vtkNew<sensei::VTKDataAdaptor> vtkDataAdaptor;
@@ -235,6 +141,7 @@ int main(int argc, char** argv) {
   }
 
   analysisAdaptor->Finalize();
+  analysisAdaptor.Reset();
 
   free(bodies.vel);
   free(bodies.pos);

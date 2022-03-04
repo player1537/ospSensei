@@ -1,4 +1,14 @@
 <sensei>
+    <transport
+        type="hdf5"
+        filename="out.h5"
+        enabled="1"
+    >
+        <mesh
+            name="bodies"
+            />
+    </transport>
+    <!--
     <analysis
         type="histogram"
         mesh="bodies"
@@ -7,4 +17,6 @@
         bins="10"
         enabled="1"
         />
+
+    -->
 </sensei>
