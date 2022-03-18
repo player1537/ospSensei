@@ -1,12 +1,10 @@
 <sensei>
     <transport
         type="hdf5"
-        filename="out.h5"
+        filename="/home/thobson/src/ospray_studio_sensei.bak/out.h5"
         enabled="1"
+        method="sx"
     >
-        <mesh
-            name="bodies"
-            />
     </transport>
     <!--
     <analysis

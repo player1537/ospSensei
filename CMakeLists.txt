@@ -10,6 +10,12 @@ find_package(
 )
 
 
+find_package(
+  VTK
+  REQUIRED
+)
+
+
 add_library(
   OSPRayStudioVisualization
 SHARED
@@ -28,8 +34,10 @@ PUBLIC
 target_link_libraries(
   OSPRayStudioVisualization
 PUBLIC
+  ${VTK_LIBRARIES}
   sensei
   ospray_sg
+  ospStudioLib
 )
 
 
@@ -44,6 +52,7 @@ add_executable(
   nbody
   app/nbody/nbody.cpp
 )
+
 
 target_link_libraries(
   nbody

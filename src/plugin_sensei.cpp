@@ -8,6 +8,7 @@
 #include <memory>
 
 // OSPRay Studio
+#include "app/Batch.h"
 #include "app/ospStudio.h"
 #include "app/Plugin.h"
 
@@ -16,6 +17,7 @@
 
 // VTK
 #include <vtkNew.h>
+#include <vtkSmartPointer.h>
 
 namespace ospray {
 namespace plugin_sensei {
@@ -27,13 +29,48 @@ struct PluginSENSEI : public Plugin {
   {}
 
   void mainMethod(std::shared_ptr<StudioContext> ctx) override;
-};
 
-void PluginSENSEI::mainMethod(std::shared_ptr<StudioContext> ctx) {
+private:
+  enum class ShouldContinue {
+    YES,
+    NO,
+  };
+
+  bool first{true};
+  void onFirstCall(const std::shared_ptr<StudioContext> &ctx);
+  ShouldContinue onSubsequentCalls(const std::shared_ptr<StudioContext> &ctx);
+  void onLastCall(const std::shared_ptr<StudioContext> &ctx);
+
   using DataAdaptor = sensei::ConfigurableInTransitDataAdaptor;
   using AnalysisAdaptor = plugin_sensei::OSPRayStudioVisualization;
 
-  vtkNew<AnalysisAdaptor> analysisAdaptor;
+  vtkSmartPointer<AnalysisAdaptor> analysisAdaptor;
+  vtkSmartPointer<DataAdaptor> dataAdaptor;
+};
+
+void PluginSENSEI::mainMethod(std::shared_ptr<StudioContext> ctx) {
+  if (first) {
+    onFirstCall(ctx);
+    first = false;
+  } else {
+    ShouldContinue sc = onSubsequentCalls(ctx);
+    switch (sc) {
+      case ShouldContinue::YES: {
+        auto batch = std::dynamic_pointer_cast<BatchContext>(ctx);
+        batch->shouldContinueRendering = true;
+        break;
+      }
+
+      case ShouldContinue::NO: {
+        onLastCall(ctx);
+        break;
+      }
+    }
+  }
+}
+
+void PluginSENSEI::onFirstCall(const std::shared_ptr<StudioContext> &ctx) {
+  analysisAdaptor = vtkNew<AnalysisAdaptor>();
 
   if (0 != analysisAdaptor->Initialize()) {
     SENSEI_ERROR("Failed to initialize analysis adaptor")//no semicolon
@@ -54,23 +91,27 @@ void PluginSENSEI::mainMethod(std::shared_ptr<StudioContext> ctx) {
     SENSEI_ERROR("Failed to open data adaptor stream")//no semicolon
     return;
   }
+}
 
-  for (;;) {
-    if (0 != analysisAdaptor->Execute(dataAdaptor)) {
-      SENSEI_ERROR("Failed to execute analysis adaptor")//no semicolon
-      return;
-    }
-
-    if (0 != dataAdaptor->ReleaseData()) {
-      SENSEI_ERROR("Failed to release data adaptor data")//no semicolon
-      return;
-    }
-
-    if (0 != dataAdaptor->AdvanceStream()) {
-      break;
-    }
+PluginSENSEI::ShouldContinue PluginSENSEI::onSubsequentCalls(const std::shared_ptr<StudioContext> &ctx) {
+  if (0 != analysisAdaptor->Execute(dataAdaptor)) {
+    SENSEI_ERROR("Failed to execute analysis adaptor")//no semicolon
+    return ShouldContinue::NO;
   }
 
+  if (0 != dataAdaptor->ReleaseData()) {
+    SENSEI_ERROR("Failed to release data adaptor data")//no semicolon
+    return ShouldContinue::NO;
+  }
+
+  if (0 != dataAdaptor->AdvanceStream()) {
+    return ShouldContinue::NO;
+  }
+
+  return ShouldContinue::YES;
+}
+
+void PluginSENSEI::onLastCall(const std::shared_ptr<StudioContext> &ctx) {
   if (0 != dataAdaptor->CloseStream()) {
     SENSEI_ERROR("Failed to close data adaptor stream")//no semicolon
     return;
@@ -81,14 +122,14 @@ void PluginSENSEI::mainMethod(std::shared_ptr<StudioContext> ctx) {
     return;
   }
 
-  dataAdaptor.Reset();
+  dataAdaptor = nullptr;
 
   if (0 != analysisAdaptor->Finalize()) {
     SENSEI_ERROR("Failed to finalize analysis adaptor")//no semicolon
     return;
   }
 
-  analysisAdaptor.Reset();
+  analysisAdaptor = nullptr;
 }
 
 extern "C" PLUGIN_INTERFACE Plugin *init_plugin_sensei()

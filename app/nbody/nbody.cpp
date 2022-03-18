@@ -97,6 +97,23 @@ int main(int argc, char** argv) {
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
   analysisAdaptor->Initialize(configFilename);
 
+  vtkNew<vtkCellArray::ArrayType32> offsets;
+  offsets->Initialize();
+  offsets->SetNumberOfComponents(1);
+  offsets->SetNumberOfTuples(nBodies + 1);
+  for (size_t i=0; i<nBodies; ++i) {
+    offsets->SetTypedComponent(i, 0, i);
+  }
+  offsets->SetTypedComponent(nBodies, 0, nBodies);
+
+  vtkNew<vtkCellArray::ArrayType32> connectivity;
+  connectivity->Initialize();
+  connectivity->SetNumberOfComponents(1);
+  connectivity->SetNumberOfTuples(nBodies);
+  for (size_t i=0; i<nBodies; ++i) {
+    connectivity->SetTypedComponent(i, 0, i);
+  }
+
   for (int iter = 0; iter <= nIters; ++iter) {
     SENSEI_STATUS("On iteration " << iter)//no semicolon
     if (iter > 0) {
@@ -125,10 +142,15 @@ int main(int argc, char** argv) {
     floatArrayVel->SetNumberOfComponents(3);
     floatArrayVel->SetArray((float *)bodies.vel, 3 * nBodies, /*save=*/1);
 
+    vtkNew<vtkCellArray> cellArrayVerts;
+    cellArrayVerts->Initialize();
+    cellArrayVerts->SetData(offsets, connectivity);
+
     vtkNew<vtkPolyData> polyData;
     polyData->Initialize();
     polyData->SetPoints(points);
     polyData->GetPointData()->AddArray(floatArrayVel);
+    polyData->SetVerts(cellArrayVerts);
 
     vtkNew<sensei::VTKDataAdaptor> vtkDataAdaptor;
     vtkDataAdaptor->SetDataTime(iter * dt);
