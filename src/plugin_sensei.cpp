@@ -31,6 +31,8 @@ struct PluginSENSEI : public Plugin {
   void mainMethod(std::shared_ptr<StudioContext> ctx) override;
 
 private:
+  std::string optConfigFilename;
+
   enum class ShouldContinue {
     YES,
     NO,
@@ -52,24 +54,60 @@ void PluginSENSEI::mainMethod(std::shared_ptr<StudioContext> ctx) {
   if (first) {
     onFirstCall(ctx);
     first = false;
-  } else {
-    ShouldContinue sc = onSubsequentCalls(ctx);
-    switch (sc) {
-      case ShouldContinue::YES: {
-        auto batch = std::dynamic_pointer_cast<BatchContext>(ctx);
-        batch->shouldContinueRendering = true;
-        break;
-      }
+  }
 
-      case ShouldContinue::NO: {
-        onLastCall(ctx);
-        break;
-      }
+
+  ShouldContinue sc = onSubsequentCalls(ctx);
+  switch (sc) {
+    case ShouldContinue::YES: {
+      std::fprintf(stderr, "plugin_sensei: We should continue\n");
+      auto batch = std::dynamic_pointer_cast<BatchContext>(ctx);
+      batch->shouldContinueRendering = true;
+      break;
+    }
+
+    case ShouldContinue::NO: {
+      std::fprintf(stderr, "plugin_sensei: We should not continue\n");
+      onLastCall(ctx);
+      break;
     }
   }
 }
 
 void PluginSENSEI::onFirstCall(const std::shared_ptr<StudioContext> &ctx) {
+  std::fprintf(stderr, "plugin_sensei: First call\n");
+
+  auto &studioCommon = ctx->studioCommon;
+  int ac = studioCommon.plugin_argc;
+  const char **av = studioCommon.plugin_argv;
+
+  for (int i=0; i<ac; ++i) {
+    std::string arg = av[i];
+    if (arg == "--plugin:sensei:configFilename") {
+      optConfigFilename = av[i + 1];
+      ++i;
+    }
+  }
+
+  int mpiIsInitialized;
+  MPI_Initialized(&mpiIsInitialized);
+  
+  if (!mpiIsInitialized) {
+    int argc = 0;
+    char *argv[] = { NULL };
+    int provided;
+    int success = MPI_Init_thread(NULL, NULL, MPI_THREAD_FUNNELED, &provided);
+    if (success != MPI_SUCCESS) {
+      SENSEI_ERROR("Error while initializing MPI")//no semicolon
+      return;
+    }
+
+    if (provided != MPI_THREAD_FUNNELED) {
+      SENSEI_ERROR("MPI provided the wrong level of thread support")//no semicolon
+      return;
+    }
+  }
+
   analysisAdaptor = vtkNew<AnalysisAdaptor>();
 
   if (0 != analysisAdaptor->Initialize()) {
@@ -80,9 +118,9 @@ void PluginSENSEI::onFirstCall(const std::shared_ptr<StudioContext> &ctx) {
   analysisAdaptor->SetRootNode(ctx->frame->child("world").shared_from_this());
   analysisAdaptor->SetScheduler(ctx->scheduler);
 
-  vtkNew<DataAdaptor> dataAdaptor;
+  dataAdaptor = vtkNew<DataAdaptor>();
 
-  if (0 != dataAdaptor->Initialize("transport.xml")) {
+  if (0 != dataAdaptor->Initialize(optConfigFilename)) {
     SENSEI_ERROR("Failed to initialize data adaptor")//no semicolon
     return;
   }
@@ -94,7 +132,9 @@ void PluginSENSEI::onFirstCall(const std::shared_ptr<StudioContext> &ctx) {
 }
 
 PluginSENSEI::ShouldContinue PluginSENSEI::onSubsequentCalls(const std::shared_ptr<StudioContext> &ctx) {
-  if (0 != analysisAdaptor->Execute(dataAdaptor)) {
+  std::fprintf(stderr, "plugin_sensei: Subsequent call\n");
+
+  if (!analysisAdaptor->Execute(dataAdaptor)) {
     SENSEI_ERROR("Failed to execute analysis adaptor")//no semicolon
     return ShouldContinue::NO;
   }
@@ -112,6 +152,8 @@ PluginSENSEI::ShouldContinue PluginSENSEI::onSubsequentCalls(const std::shared_p
 }
 
 void PluginSENSEI::onLastCall(const std::shared_ptr<StudioContext> &ctx) {
+  std::fprintf(stderr, "plugin_sensei: Last call\n");
+
   if (0 != dataAdaptor->CloseStream()) {
     SENSEI_ERROR("Failed to close data adaptor stream")//no semicolon
     return;
