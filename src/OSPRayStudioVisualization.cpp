@@ -32,6 +32,8 @@ namespace plugin_sensei {
 struct OSPRayStudioVisualization::InternalsType {
   bool Execute(size_t nPoints, float *positions);
 
+  bool HasInitialized{false};
+
   ospray::sg::NodePtr RootNode{};
   ospray::sg::SchedulerPtr Scheduler{};
 
@@ -132,20 +134,16 @@ bool OSPRayStudioVisualization::InternalsType::Execute(size_t nPoints, float *po
   std::fprintf(stderr, "positions[1] = %+0.2f\n", positions[1]);
   std::fprintf(stderr, "positions[2] = %+0.2f\n", positions[2]);
 
-  // OSPData sharedData;
-  // sharedData = ospNewSharedData((void *)bodies.pos, OSP_FLOAT, bodies.count);
-  // ospCommit(sharedData);
+  if (!HasInitialized) {
+    Transform = RootNode->createChild("xfm_sensei", "transform").shared_from_this();
 
-  // OSPData data;
-  // data = ospNewData(OSP_VEC3F, bodies.count);
-  // ospCopyData(sharedData, data);
-  // ospCommit(data);
-  // ospRelease(sharedData);
+    Sphere = Transform->createChild("points", "geometry_spheres").shared_from_this();
+    Sphere->child("radius") = 0.01f;
 
-  // OSPGeometry sphere;
-  // sphere = ospNewGeometry("sphere");
-  // ospSetObject(sphere, "sphere.position", data);
-  // ospCommit(sphere);
+    HasInitialized = true;
+  }
+
+  Sphere->createChildData("sphere.position", nPoints, (vec3f *)positions, /*isShared=*/true);
 
   return /*success=*/true;
 }
