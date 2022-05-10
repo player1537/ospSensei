@@ -1,6 +1,9 @@
 ## Copyright 2009-2020 Intel Corporation
 ## SPDX-License-Identifier: Apache-2.0
 
+cmake_minimum_required(VERSION 3.22)
+project(OSPSensei)
+
 enable_language(C)
 
 
@@ -16,15 +19,21 @@ find_package(
 )
 
 
+find_package(
+  ospray
+  REQUIRED
+)
+
+
 add_library(
-  OSPRayStudioVisualization
+  ospSensei
 SHARED
-  src/OSPRayStudioVisualization.cpp
+  src/ospSensei/OSPRayVisualization.cpp
 )
 
 
 target_include_directories(
-  OSPRayStudioVisualization
+  ospSensei
 PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
@@ -32,18 +41,17 @@ PUBLIC
 
 
 target_link_libraries(
-  OSPRayStudioVisualization
+  ospSensei
 PUBLIC
   ${VTK_LIBRARIES}
   sensei
-  ospray_sg
-  ospStudioLib
+  ospray::ospray
 )
 
 
 install(
   TARGETS
-    OSPRayStudioVisualization
+    ospSensei
   COMPONENT lib
 )
 
@@ -57,7 +65,7 @@ add_executable(
 target_link_libraries(
   nbody
 PUBLIC
-  OSPRayStudioVisualization
+  ospSensei
 )
 
 
@@ -66,34 +74,3 @@ install(
     nbody
   COMPONENT bin
 )
-
-
-option(BUILD_PLUGIN_SENSEI "Sensei plugin" OFF)
-
-if (BUILD_PLUGIN_SENSEI)
-  set( pluginName "ospray_studio_plugin_sensei")
-
-  add_library(${pluginName} SHARED
-    src/plugin_sensei.cpp
-  )
-
-  target_link_libraries(${pluginName} OSPRayStudioVisualization)
-
-  target_link_libraries(${pluginName} ospray_sg)
-
-  # Only link against imgui if needed (ie, pure file importers don't)
-  target_link_libraries(${pluginName} imgui)
-
-  target_include_directories(${pluginName}
-    PRIVATE ${CMAKE_SOURCE_DIR}
-  )
-
-  install(TARGETS ${pluginName}
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT lib
-    # on Windows put the dlls into bin
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-      COMPONENT lib
-  )
-
-endif()

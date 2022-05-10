@@ -15,12 +15,13 @@
 // VTK
 #include <vtkDataObject.h>
 #include <vtkFloatArray.h>
+#include <vtkMultiBlockDataSet.h>
 #include <vtkPointData.h>
 #include <vtkPoints.h>
 #include <vtkPolyData.h>
 
-// plugin_sensei
-#include <plugin_sensei/OSPRayStudioVisualization.h>
+// ospSensei
+#include <ospSensei/OSPRayVisualization.h>
 
 #define SOFTENING 1e-9f
 
@@ -71,8 +72,15 @@ void bodyForce(const Bodies &bodies, float dt, size_t n) {
 
 
 int main(int argc, char** argv) {
-  if (MPI_SUCCESS != MPI_Init(&argc, &argv)) {
-    SENSEI_ERROR("MPI_Init failed")//no semicolon
+  int provided;
+  int success = MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+  if (success != MPI_SUCCESS) {
+    SENSEI_ERROR("Error while initializing MPI")//no semicolon
+    return 1;
+  }
+
+  if (provided != MPI_THREAD_MULTIPLE) {
+    SENSEI_ERROR("MPI provided the wrong level of thread support")//no semicolon
     return 1;
   }
 
@@ -85,6 +93,18 @@ int main(int argc, char** argv) {
   if (argc > 3 && argv[3][0] != '\0') dt = atof(argv[3]);
   if (argc > 4 && argv[4][0] != '\0') configFilename = argv[4];
 
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+  int size;
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+  size_t length = (nBodies + size - 1) / size;
+  size_t start = rank * length;
+  if (start + length > nBodies) {
+    length = nBodies - start;
+  }
+
   Bodies bodies;
   bodies.count = nBodies;
   bodies.pos = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.pos)));
@@ -93,9 +113,9 @@ int main(int argc, char** argv) {
   randomize(bodies.pos, nBodies);
   randomize(bodies.vel, nBodies);
 
-  vtkNew<sensei::ConfigurableAnalysis> analysisAdaptor;
+  vtkNew<ospSensei::OSPRayVisualization> analysisAdaptor;
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
-  analysisAdaptor->Initialize(configFilename);
+  analysisAdaptor->Initialize();
 
   vtkNew<vtkCellArray::ArrayType32> offsets;
   offsets->Initialize();
@@ -149,13 +169,22 @@ int main(int argc, char** argv) {
     vtkNew<vtkPolyData> polyData;
     polyData->Initialize();
     polyData->SetPoints(points);
+    polyData->GetPointData()->AddArray(floatArrayPos);
     polyData->GetPointData()->AddArray(floatArrayVel);
     polyData->SetVerts(cellArrayVerts);
+
+    vtkNew<vtkMultiBlockDataSet> multiBlockDataSet;
+    multiBlockDataSet->Initialize();
+    multiBlockDataSet->SetNumberOfBlocks(size);
+    for (size_t i=0; i<size; ++i) {
+      multiBlockDataSet->SetBlock(i, nullptr);
+    }
+    multiBlockDataSet->SetBlock(rank, polyData);
 
     vtkNew<sensei::VTKDataAdaptor> vtkDataAdaptor;
     vtkDataAdaptor->SetDataTime(iter * dt);
     vtkDataAdaptor->SetDataTimeStep(iter);
-    vtkDataAdaptor->SetDataObject("bodies", polyData);
+    vtkDataAdaptor->SetDataObject("bodies", multiBlockDataSet);
 
     analysisAdaptor->Execute(vtkDataAdaptor);
 
