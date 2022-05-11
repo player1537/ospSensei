@@ -68,6 +68,7 @@ struct OSPRayVisualization::InternalsType {
   OSPDevice Device;
   OSPData GeometrySpherePosition;
   OSPGeometry Geometry;
+  OSPMaterial Material;
   OSPGeometricModel GeometricModel;
   OSPGroup Group;
   OSPInstance Instance;
@@ -163,9 +164,26 @@ bool OSPRayVisualization::Execute(sensei::DataAdaptor *data) {
 }
 
 bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, float *positions) {
+  std::fprintf(stderr, "nPoints = %lu\n", nPoints);
   std::fprintf(stderr, "positions[0] = %+0.2f\n", positions[0]);
   std::fprintf(stderr, "positions[1] = %+0.2f\n", positions[1]);
   std::fprintf(stderr, "positions[2] = %+0.2f\n", positions[2]);
+
+  float lo[3], hi[3];
+  lo[0] = hi[0] = positions[0*3+0];
+  lo[1] = hi[1] = positions[0*3+1];
+  lo[2] = hi[2] = positions[0*3+2];
+  for (size_t i=1; i<nPoints; ++i) {
+    if (positions[i*3+0] < lo[0]) lo[0] = positions[i*3+0];
+    if (positions[i*3+1] < lo[1]) lo[1] = positions[i*3+1];
+    if (positions[i*3+2] < lo[2]) lo[2] = positions[i*3+2];
+    if (positions[i*3+0] > hi[0]) hi[0] = positions[i*3+0];
+    if (positions[i*3+1] > hi[1]) hi[1] = positions[i*3+1];
+    if (positions[i*3+2] > hi[2]) hi[2] = positions[i*3+2];
+  }
+
+  std::fprintf(stderr, "min = %+0.2f, %+0.2f, %+0.2f\n", lo[0], lo[1], lo[2]);
+  std::fprintf(stderr, "max = %+0.2f, %+0.2f, %+0.2f\n", hi[0], hi[1], hi[2]);
   
   if (!HasInitialized) {
     MPI_Comm_rank(comm, &CommRank);
@@ -185,12 +203,16 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
     ospSetObject(Geometry, "sphere.position", GeometrySpherePosition);
     ospCommit(Geometry);
 
+    Material = ospNewMaterial(nullptr, "obj");
+    ospCommit(Material);
+
     GeometricModel = ospNewGeometricModel(NULL);
     ospSetObject(GeometricModel, "geometry", Geometry);
+    ospSetObject(GeometricModel, "material", Material);
     ospCommit(GeometricModel);
 
     Group = ospNewGroup();
-    ospSetObjectAsData(Group, "geometry", OSP_GEOMETRY, GeometricModel);
+    ospSetObjectAsData(Group, "geometry", OSP_GEOMETRIC_MODEL, GeometricModel);
     ospCommit(Group);
 
     Instance = ospNewInstance(NULL);
@@ -225,7 +247,7 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
     ospSetVec3f(Renderer, "backgroundColor", 0.5f, 0.5f, 0.5f);
     ospCommit(Renderer);
 
-    FrameBuffer = ospNewFrameBuffer(Width, Height, OSP_FB_RGBA8, OSP_FB_COLOR);
+    FrameBuffer = ospNewFrameBuffer(Width, Height, OSP_FB_SRGBA, OSP_FB_COLOR | OSP_FB_ACCUM);
 
     Future = nullptr;
 
@@ -246,7 +268,7 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
   ospSetObject(GeometricModel, "geometry", Geometry);
   ospCommit(GeometricModel);
 
-  ospSetObjectAsData(Group, "geometry", OSP_GEOMETRY, GeometricModel);
+  ospSetObjectAsData(Group, "geometry", OSP_GEOMETRIC_MODEL, GeometricModel);
   ospCommit(Group);
 
   ospSetObject(Instance, "group", Group);
@@ -255,9 +277,14 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
   ospSetObjectAsData(World, "instance", OSP_INSTANCE, Instance);
   ospCommit(World);
 
+  OSPBounds bounds = ospGetBounds(World);
+  std::fprintf(stderr, "bounds = %+0.2f, %+0.2f, %+0.2f, %+0.2f, %+0.2f, %+0.2f\n", bounds.lower[0], bounds.lower[1], bounds.lower[2], bounds.upper[0], bounds.upper[1], bounds.upper[2]);
+
   ospResetAccumulation(FrameBuffer);
   Future = ospRenderFrame(FrameBuffer, Renderer, Camera, World);
   ospWait(Future, OSP_TASK_FINISHED);
+  ospRelease(Future);
+  Future = nullptr;
 
   if (CommRank == 0) {
     std::string filename = std::string("ospSensei.") + std::to_string(FrameNumber) + std::string(".ppm");
@@ -282,7 +309,7 @@ void OSPRayVisualization::InternalsType::Finalize() {
   ospRelease(GeometricModel);
   ospRelease(Geometry);
   if (GeometrySpherePosition) ospRelease(GeometrySpherePosition);
-  ospDeviceRelease(Device);
+  // ospDeviceRelease(Device);
 
   ospShutdown();
 }
