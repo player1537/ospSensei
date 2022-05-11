@@ -60,21 +60,22 @@ struct OSPRayVisualization::InternalsType {
 
   int Width{256};
   int Height{256};
-  int FrameNumber{0};
+  float GeometryRadius{0.1f};
 
+  int FrameNumber{0};
   int CommRank{-1};
   int CommSize{-1};
 
   OSPDevice Device;
-  OSPData GeometrySpherePosition;
+  OSPData GeometrySpherePositionData;
   OSPGeometry Geometry;
   OSPMaterial Material;
   OSPGeometricModel GeometricModel;
   OSPGroup Group;
   OSPInstance Instance;
   OSPLight Light;
-  std::vector<float> WorldRegionValues;
-  OSPData WorldRegion;
+  std::vector<float> WorldRegion;
+  OSPData WorldRegionData;
   OSPWorld World;
   OSPCamera Camera;
   OSPRenderer Renderer;
@@ -93,6 +94,13 @@ int OSPRayVisualization::Initialize() {
 }
 
 bool OSPRayVisualization::Execute(sensei::DataAdaptor *data) {
+  MPI_Comm comm;
+  comm = GetCommunicator();
+
+  int rank, size;
+  MPI_Comm_rank(comm, &rank);
+  MPI_Comm_size(comm, &size);
+
   vtkDataObject *mesh;
   if (data->GetMesh("bodies", /*structureOnly=*/false, mesh)) {
     SENSEI_ERROR("Failed to get mesh 'bodies'")//no semicolon
@@ -106,61 +114,65 @@ bool OSPRayVisualization::Execute(sensei::DataAdaptor *data) {
     return /*success=*/false;
   }
 
-  if (multiBlockDataSet->GetNumberOfBlocks() > 1) {
-    SENSEI_ERROR("Expected mesh 'bodies' to have only 1 block")//no semicolon
+  if (multiBlockDataSet->GetNumberOfBlocks() != size) {
+    SENSEI_ERROR("Expected mesh 'bodies' to have only " << size << " blocks")//no semicolon
     return /*success=*/false;
   }
 
   vtkDataObject *dataObject;
-  dataObject = multiBlockDataSet->GetBlock(0);
+  dataObject = multiBlockDataSet->GetBlock(rank);
+  if (dataObject == nullptr) {
+    SENSEI_ERROR("Expected mesh 'bodies' block " << rank << " to be non-null")//no semicolon
+    return /*success=*/false;
+  }
 
   vtkPolyData *polyData;
   polyData = dynamic_cast<vtkPolyData *>(dataObject);
   if (!polyData) {
-    SENSEI_ERROR("Expected mesh 'bodies' first block to be a vtkPolyData")//no semicolon
+    SENSEI_ERROR("Expected mesh 'bodies' block " << rank << " to be a vtkPolyData")//no semicolon
     return /*success=*/false;
   }
 
   if (data->AddArray(mesh, "bodies", vtkDataObject::POINT, "position")) {
-    SENSEI_ERROR("Failed to get array 'position' from mesh 'bodies' first block")//no semicolon
+    SENSEI_ERROR("Failed to get array 'position' from mesh 'bodies' block " << rank)//no semicolon
     return /*success=*/false;
   }
 
   vtkPoints *points;
   points = polyData->GetPoints();
   if (!points) {
-    SENSEI_ERROR("Expected points from mesh 'bodies' first block to exist")//no semicolon
+    SENSEI_ERROR("Expected points from mesh 'bodies' block " << rank << " to exist")//no semicolon
     return /*success=*/false;
   }
 
   vtkDataArray *dataArray;
   dataArray = points->GetData();
   if (!dataArray) {
-    SENSEI_ERROR("Expected points from mesh 'bodies' first block to have data")//no semicolon
+    SENSEI_ERROR("Expected points from mesh 'bodies' block " << rank << " to have data")//no semicolon
     return /*success=*/false;
   }
 
   vtkFloatArray *floatArray;
   if (!(floatArray = vtkFloatArray::SafeDownCast(dataArray))) {
-    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' first block to be a vtkFloatArray")//no semicolon
+    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' block " << rank << " to be a vtkFloatArray")//no semicolon
     return /*success=*/false;
   }
 
   size_t nComponents = floatArray->GetNumberOfComponents();
   if (nComponents != 3) {
-    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' first block to be a vtkFloatArray with 3 components")//no semicolon
+    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' block " << rank << " to be a vtkFloatArray with 3 components")//no semicolon
     return /*success=*/false;
   }
 
   if (!floatArray->HasStandardMemoryLayout()) {
-    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' first block to be a vtkFloatArray with 3 components and standard memory layout")//no semicolon
+    SENSEI_ERROR("Expected array 'position' from mesh 'bodies' block " << rank << " to be a vtkFloatArray with 3 components and standard memory layout")//no semicolon
     return /*success=*/false;
   }
 
   size_t nPoints = floatArray->GetNumberOfTuples();
   float *positions = floatArray->GetPointer(0);
 
-  return /*success=*/this->Internals->Execute(GetCommunicator(), nPoints, positions);
+  return /*success=*/this->Internals->Execute(comm, nPoints, positions);
 }
 
 bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, float *positions) {
@@ -189,24 +201,24 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
     MPI_Comm_rank(comm, &CommRank);
     MPI_Comm_size(comm, &CommSize);
 
-    ospInit(NULL, NULL);
+    ospLoadModule("mpi");
 
-    // ospLoadModule("mpi");
+    Device = ospNewDevice("mpiDistributed");
+    ospDeviceCommit(Device);
+    ospSetCurrentDevice(Device);
 
-    // Device = ospNewDevice("mpiDistributed");
-    // ospDeviceCommit(Device);
-    // ospSetCurrentDevice(Device);
-
-    GeometrySpherePosition = nullptr;
+    GeometrySpherePositionData = nullptr;
 
     Geometry = ospNewGeometry("sphere");
-    ospSetObject(Geometry, "sphere.position", GeometrySpherePosition);
+    ospSetObject(Geometry, "sphere.position", GeometrySpherePositionData);
+    ospSetFloat(Geometry, "radius", GeometryRadius);
     ospCommit(Geometry);
 
     Material = ospNewMaterial(nullptr, "obj");
+    ospSetVec3f(Material, "kd", (CommRank % 4 == 0 ? 1.0f : 0.0f), (CommRank % 4 == 1 ? 1.0f : 0.0f), (CommRank % 4 == 2 ? 1.0f : 0.0f));
     ospCommit(Material);
 
-    GeometricModel = ospNewGeometricModel(NULL);
+    GeometricModel = ospNewGeometricModel(nullptr);
     ospSetObject(GeometricModel, "geometry", Geometry);
     ospSetObject(GeometricModel, "material", Material);
     ospCommit(GeometricModel);
@@ -215,35 +227,29 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
     ospSetObjectAsData(Group, "geometry", OSP_GEOMETRIC_MODEL, GeometricModel);
     ospCommit(Group);
 
-    Instance = ospNewInstance(NULL);
+    Instance = ospNewInstance(nullptr);
     ospSetObject(Instance, "group", Group);
     ospCommit(Instance);
 
     Light = ospNewLight("ambient");
     ospCommit(Light);
 
-    WorldRegionValues.insert(WorldRegionValues.end(), {
-      -100.0f, -100.0f, -100.0f,
-      +100.0f, +100.0f, +100.0f,
-    });
-
-    WorldRegion = ospNewSharedData(WorldRegionValues.data(), OSP_BOX3F, WorldRegionValues.size() / 6);
-    ospCommit(WorldRegion);
+    WorldRegionData = nullptr;
 
     World = ospNewWorld();
     ospSetObjectAsData(World, "instance", OSP_INSTANCE, Instance);
     ospSetObjectAsData(World, "light", OSP_LIGHT, Light);
-    ospSetObject(World, "region", WorldRegion);
+    ospSetObject(World, "region", WorldRegionData);
     ospCommit(World);
 
     Camera = ospNewCamera("perspective");
     ospSetFloat(Camera, "aspect", (float)Width / (float)Height);
-    ospSetVec3f(Camera, "position", 100.0f, 0.0f, 0.0f);
+    ospSetVec3f(Camera, "position", hi[0]+1.0f, 0.0f, 0.0f);
     ospSetVec3f(Camera, "direction", -1.0f, 0.0f, 0.0f);
     ospSetVec3f(Camera, "up", 0.0f, 1.0f, 0.0f);
     ospCommit(Camera);
 
-    Renderer = ospNewRenderer("scivis");
+    Renderer = ospNewRenderer("mpiRaycast");
     ospSetVec3f(Renderer, "backgroundColor", 0.5f, 0.5f, 0.5f);
     ospCommit(Renderer);
 
@@ -254,15 +260,15 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
     HasInitialized = true;
   }
 
-  if (GeometrySpherePosition) {
-    ospRelease(GeometrySpherePosition);
-    GeometrySpherePosition = nullptr;
+  if (GeometrySpherePositionData) {
+    ospRelease(GeometrySpherePositionData);
+    GeometrySpherePositionData = nullptr;
   }
 
-  GeometrySpherePosition = ospNewSharedData(positions, OSP_VEC3F, nPoints);
-  ospCommit(GeometrySpherePosition);
+  GeometrySpherePositionData = ospNewSharedData(positions, OSP_VEC3F, nPoints);
+  ospCommit(GeometrySpherePositionData);
   
-  ospSetObject(Geometry, "sphere.position", GeometrySpherePosition);
+  ospSetObject(Geometry, "sphere.position", GeometrySpherePositionData);
   ospCommit(Geometry);
 
   ospSetObject(GeometricModel, "geometry", Geometry);
@@ -274,11 +280,18 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
   ospSetObject(Instance, "group", Group);
   ospCommit(Instance);
 
-  ospSetObjectAsData(World, "instance", OSP_INSTANCE, Instance);
-  ospCommit(World);
+  WorldRegion.clear();
+  WorldRegion.insert(WorldRegion.end(), {
+    lo[0]-GeometryRadius, lo[1]-GeometryRadius, lo[2]-GeometryRadius,
+    hi[0]+GeometryRadius, hi[1]+GeometryRadius, hi[2]+GeometryRadius,
+  });
 
-  OSPBounds bounds = ospGetBounds(World);
-  std::fprintf(stderr, "bounds = %+0.2f, %+0.2f, %+0.2f, %+0.2f, %+0.2f, %+0.2f\n", bounds.lower[0], bounds.lower[1], bounds.lower[2], bounds.upper[0], bounds.upper[1], bounds.upper[2]);
+  WorldRegionData = ospNewSharedData(WorldRegion.data(), OSP_BOX3F, WorldRegion.size() / 6);
+  ospCommit(WorldRegionData);
+
+  ospSetObjectAsData(World, "instance", OSP_INSTANCE, Instance);
+  ospSetObject(World, "region", WorldRegionData);
+  ospCommit(World);
 
   ospResetAccumulation(FrameBuffer);
   Future = ospRenderFrame(FrameBuffer, Renderer, Camera, World);
@@ -308,8 +321,8 @@ void OSPRayVisualization::InternalsType::Finalize() {
   ospRelease(Group);
   ospRelease(GeometricModel);
   ospRelease(Geometry);
-  if (GeometrySpherePosition) ospRelease(GeometrySpherePosition);
-  // ospDeviceRelease(Device);
+  if (GeometrySpherePositionData) ospRelease(GeometrySpherePositionData);
+  ospDeviceRelease(Device);
 
   ospShutdown();
 }

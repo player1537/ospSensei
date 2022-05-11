@@ -110,8 +110,13 @@ int main(int argc, char** argv) {
   bodies.pos = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.pos)));
   bodies.vel = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.vel)));
 
-  randomize(bodies.pos, nBodies);
-  randomize(bodies.vel, nBodies);
+  if (rank == 0) {
+    randomize(bodies.pos, nBodies);
+    randomize(bodies.vel, nBodies);
+  }
+
+  MPI_Bcast(bodies.pos, 3 * nBodies, MPI_FLOAT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(bodies.vel, 3 * nBodies, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
   vtkNew<ospSensei::OSPRayVisualization> analysisAdaptor;
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
@@ -201,5 +206,4 @@ int main(int argc, char** argv) {
 
   return 0;
 }
-
 // vim: ts=2:sts=2
