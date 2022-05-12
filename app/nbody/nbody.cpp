@@ -30,31 +30,115 @@ typedef struct {
   float x, y, z;
 } Point;
 
-typedef struct {
+struct Bodies {
+  Bodies(size_t size_)
+    : count(0)
+    , size(size_)
+    , pos(new Point[size_])
+    , vel(new Point[size_])
+  {};
+
+  ~Bodies() {
+    delete[] vel;
+    delete[] pos;
+  }
+
   size_t count;
+  size_t size;
   Point *pos;
   Point *vel;
-} Bodies;
 
-void randomize(Point *p, size_t n) {
-  for (size_t i = 0; i < n; i++) {
-    p[i].x = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
-    p[i].y = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
-    p[i].z = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+  void extents(float ret[6]);
+  void reduce(float bounds[6], Bodies &ret);
+  void randomize(size_t count_);
+  void broadcast(const MPI_Comm &comm, int root);
+  void step(float dt);
+  vtkDataObject *vtk();
+};
+
+void Bodies::extents(float ret[6]) {
+  if (count <= 0) {
+    fprintf(stderr, "Error: cannot compute extents of empty object\n");
+    std::exit(1);
+  }
+
+  ret[3*0+0] = ret[3*1+0] = pos[0].x;
+  ret[3*0+1] = ret[3*1+1] = pos[0].y;
+  ret[3*0+2] = ret[3*1+2] = pos[0].z;
+  
+  for (size_t i=1; i<count; ++i) {
+    if (pos[i].x < ret[3*0+0]) ret[3*0+0] = pos[i].x;
+    if (pos[i].y < ret[3*0+1]) ret[3*0+1] = pos[i].y;
+    if (pos[i].z < ret[3*0+2]) ret[3*0+2] = pos[i].z;
+    if (pos[i].x > ret[3*1+0]) ret[3*1+0] = pos[i].x;
+    if (pos[i].y > ret[3*1+1]) ret[3*1+1] = pos[i].y;
+    if (pos[i].z > ret[3*1+2]) ret[3*1+2] = pos[i].z;
   }
 }
 
-void bodyForce(const Bodies &bodies, float dt, size_t n) {
+void Bodies::reduce(float bounds[6], Bodies &ret) {
+  ret.count = 0;
+
+  if (count == 0) {
+    return;
+  }
+
+  float dataextents[6];
+  extents(dataextents);
+
+  for (size_t i=0; i<count; ++i) {
+    float x = (pos[i].x - dataextents[3*0+0]) / (dataextents[3*1+0] - dataextents[3*0+0] + 1.0f);
+    float y = (pos[i].y - dataextents[3*0+1]) / (dataextents[3*1+1] - dataextents[3*0+1] + 1.0f);
+    float z = (pos[i].z - dataextents[3*0+2]) / (dataextents[3*1+2] - dataextents[3*0+2] + 1.0f);
+    bool xwithin = bounds[3*0+0] <= x && x < bounds[3*1+0];
+    bool ywithin = bounds[3*0+1] <= y && y < bounds[3*1+1];
+    bool zwithin = bounds[3*0+2] <= z && z < bounds[3*1+2];
+
+    if (xwithin && ywithin && zwithin) {
+      ret.pos[ret.count] = pos[i];
+      ret.vel[ret.count] = vel[i];
+      ++ret.count;
+    }
+  }
+}
+
+void Bodies::randomize(size_t count_) {
+  if (size < count_) {
+    std::fprintf(stderr, "Error: Bodies size too small (%zu < requested %zu)\n", size, count_);
+    std::exit(1);
+  }
+
+  count = count_;
+
+  for (size_t i = 0; i < count; i++) {
+    pos[i].x = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+    pos[i].y = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+    pos[i].z = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+  }
+  for (size_t i = 0; i < count; i++) {
+    vel[i].x = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+    vel[i].y = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+    vel[i].z = 2.0f * (rand() / (float)RAND_MAX) - 1.0f;
+  }
+}
+
+void Bodies::broadcast(const MPI_Comm &comm, int root) {
+  MPI_Bcast(&count, 1, MPI_COUNT, root, comm);
+  MPI_Bcast(pos, 3 * count, MPI_FLOAT, root, comm);
+  MPI_Bcast(vel, 3 * count, MPI_FLOAT, root, comm);
+}
+
+void Bodies::step(float dt) {
   #pragma omp parallel for schedule(dynamic)
-  for (size_t i = 0; i < n; i++) { 
+  for (size_t i = 0; i < count; i++) { 
     float Fx = 0.0f;
     float Fy = 0.0f;
     float Fz = 0.0f;
 
-    for (size_t j = 0; j < n; j++) {
-      float dx = bodies.pos[j].x - bodies.pos[i].x;
-      float dy = bodies.pos[j].y - bodies.pos[i].y;
-      float dz = bodies.pos[j].z - bodies.pos[i].z;
+    for (size_t j = 0; j < count; j++) {
+      float dx = pos[j].x - pos[i].x;
+      float dy = pos[j].y - pos[i].y;
+      float dz = pos[j].z - pos[i].z;
       float distSqr = dx*dx + dy*dy + dz*dz + SOFTENING;
       float invDist = 1.0f / sqrtf(distSqr);
       float invDist3 = invDist * invDist * invDist;
@@ -64,10 +148,65 @@ void bodyForce(const Bodies &bodies, float dt, size_t n) {
       Fz += dz * invDist3;
     }
 
-    bodies.vel[i].x += dt * Fx;
-    bodies.vel[i].y += dt * Fy;
-    bodies.vel[i].z += dt * Fz;
+    vel[i].x += dt * Fx;
+    vel[i].y += dt * Fy;
+    vel[i].z += dt * Fz;
   }
+
+  #pragma omp parallel for schedule(dynamic)
+  for (size_t i = 0 ; i < count; i++) { // integrate position
+    pos[i].x += vel[i].x * dt;
+    pos[i].y += vel[i].y * dt;
+    pos[i].z += vel[i].z * dt;
+  }
+}
+
+vtkDataObject *Bodies::vtk() {
+  vtkNew<vtkCellArray::ArrayType32> offsets;
+  offsets->Initialize();
+  offsets->SetNumberOfComponents(1);
+  offsets->SetNumberOfTuples(count + 1);
+  for (size_t i=0; i<count; ++i) {
+    offsets->SetTypedComponent(i, 0, i);
+  }
+  offsets->SetTypedComponent(count, 0, count);
+
+  vtkNew<vtkCellArray::ArrayType32> connectivity;
+  connectivity->Initialize();
+  connectivity->SetNumberOfComponents(1);
+  connectivity->SetNumberOfTuples(count);
+  for (size_t i=0; i<count; ++i) {
+    connectivity->SetTypedComponent(i, 0, i);
+  }
+
+  vtkNew<vtkFloatArray> floatArrayPos;
+  floatArrayPos->Initialize();
+  floatArrayPos->SetName("position");
+  floatArrayPos->SetNumberOfComponents(3);
+  floatArrayPos->SetArray((float *)pos, 3 * count, /*save=*/1);
+
+  vtkNew<vtkPoints> points;
+  points->Initialize();
+  points->SetData(floatArrayPos);
+
+  vtkNew<vtkFloatArray> floatArrayVel;
+  floatArrayVel->Initialize();
+  floatArrayVel->SetName("velocity");
+  floatArrayVel->SetNumberOfComponents(3);
+  floatArrayVel->SetArray((float *)vel, 3 * count, /*save=*/1);
+
+  vtkNew<vtkCellArray> cellArrayVerts;
+  cellArrayVerts->Initialize();
+  cellArrayVerts->SetData(offsets, connectivity);
+
+  vtkPolyData *polyData = vtkPolyData::New();
+  polyData->Initialize();
+  polyData->SetPoints(points);
+  polyData->GetPointData()->AddArray(floatArrayPos);
+  polyData->GetPointData()->AddArray(floatArrayVel);
+  polyData->SetVerts(cellArrayVerts);
+
+  return static_cast<vtkDataObject *>(polyData);
 }
 
 
@@ -105,78 +244,35 @@ int main(int argc, char** argv) {
     length = nBodies - start;
   }
 
-  Bodies bodies;
-  bodies.count = nBodies;
-  bodies.pos = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.pos)));
-  bodies.vel = static_cast<Point *>(malloc(nBodies * sizeof(*bodies.vel)));
+  Bodies bodies(nBodies);
+  Bodies filtered(nBodies);
 
   if (rank == 0) {
-    randomize(bodies.pos, nBodies);
-    randomize(bodies.vel, nBodies);
+    bodies.randomize(nBodies);
   }
 
-  MPI_Bcast(bodies.pos, 3 * nBodies, MPI_FLOAT, 0, MPI_COMM_WORLD);
-  MPI_Bcast(bodies.vel, 3 * nBodies, MPI_FLOAT, 0, MPI_COMM_WORLD);
+  bodies.broadcast(MPI_COMM_WORLD, 0);
+
+  float bounds[6] = {
+    0.0f, 0.0f, 0.0f,
+    1.0f, 1.0f, 1.0f,
+  };
+  bounds[3*0+1] = (float)(rank + 0) / (float)size;
+  bounds[3*1+1] = (float)(rank + 1) / (float)size;
 
   vtkNew<ospSensei::OSPRayVisualization> analysisAdaptor;
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
   analysisAdaptor->Initialize();
 
-  vtkNew<vtkCellArray::ArrayType32> offsets;
-  offsets->Initialize();
-  offsets->SetNumberOfComponents(1);
-  offsets->SetNumberOfTuples(nBodies + 1);
-  for (size_t i=0; i<nBodies; ++i) {
-    offsets->SetTypedComponent(i, 0, i);
-  }
-  offsets->SetTypedComponent(nBodies, 0, nBodies);
-
-  vtkNew<vtkCellArray::ArrayType32> connectivity;
-  connectivity->Initialize();
-  connectivity->SetNumberOfComponents(1);
-  connectivity->SetNumberOfTuples(nBodies);
-  for (size_t i=0; i<nBodies; ++i) {
-    connectivity->SetTypedComponent(i, 0, i);
-  }
-
   for (int iter = 0; iter <= nIters; ++iter) {
     SENSEI_STATUS("On iteration " << iter)//no semicolon
     if (iter > 0) {
-      bodyForce(bodies, dt, nBodies); // compute interbody forces
-
-      for (int i = 0 ; i < nBodies; i++) { // integrate position
-        bodies.pos[i].x += bodies.vel[i].x * dt;
-        bodies.pos[i].y += bodies.vel[i].y * dt;
-        bodies.pos[i].z += bodies.vel[i].z * dt;
-      }
+      bodies.step(dt);
     }
 
-    vtkNew<vtkFloatArray> floatArrayPos;
-    floatArrayPos->Initialize();
-    floatArrayPos->SetName("position");
-    floatArrayPos->SetNumberOfComponents(3);
-    floatArrayPos->SetArray((float *)bodies.pos, 3 * nBodies, /*save=*/1);
+    bodies.reduce(bounds, filtered);
 
-    vtkNew<vtkPoints> points;
-    points->Initialize();
-    points->SetData(floatArrayPos);
-
-    vtkNew<vtkFloatArray> floatArrayVel;
-    floatArrayVel->Initialize();
-    floatArrayVel->SetName("velocity");
-    floatArrayVel->SetNumberOfComponents(3);
-    floatArrayVel->SetArray((float *)bodies.vel, 3 * nBodies, /*save=*/1);
-
-    vtkNew<vtkCellArray> cellArrayVerts;
-    cellArrayVerts->Initialize();
-    cellArrayVerts->SetData(offsets, connectivity);
-
-    vtkNew<vtkPolyData> polyData;
-    polyData->Initialize();
-    polyData->SetPoints(points);
-    polyData->GetPointData()->AddArray(floatArrayPos);
-    polyData->GetPointData()->AddArray(floatArrayVel);
-    polyData->SetVerts(cellArrayVerts);
+    vtkSmartPointer<vtkDataObject> dataObject = filtered.vtk();
 
     vtkNew<vtkMultiBlockDataSet> multiBlockDataSet;
     multiBlockDataSet->Initialize();
@@ -184,7 +280,7 @@ int main(int argc, char** argv) {
     for (size_t i=0; i<size; ++i) {
       multiBlockDataSet->SetBlock(i, nullptr);
     }
-    multiBlockDataSet->SetBlock(rank, polyData);
+    multiBlockDataSet->SetBlock(rank, dataObject);
 
     vtkNew<sensei::VTKDataAdaptor> vtkDataAdaptor;
     vtkDataAdaptor->SetDataTime(iter * dt);
@@ -198,9 +294,6 @@ int main(int argc, char** argv) {
 
   analysisAdaptor->Finalize();
   analysisAdaptor.Reset();
-
-  free(bodies.vel);
-  free(bodies.pos);
 
   MPI_Finalize();
 

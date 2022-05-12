@@ -176,26 +176,29 @@ bool OSPRayVisualization::Execute(sensei::DataAdaptor *data) {
 }
 
 bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, float *positions) {
-  std::fprintf(stderr, "nPoints = %lu\n", nPoints);
-  std::fprintf(stderr, "positions[0] = %+0.2f\n", positions[0]);
-  std::fprintf(stderr, "positions[1] = %+0.2f\n", positions[1]);
-  std::fprintf(stderr, "positions[2] = %+0.2f\n", positions[2]);
-
   float lo[3], hi[3];
-  lo[0] = hi[0] = positions[0*3+0];
-  lo[1] = hi[1] = positions[0*3+1];
-  lo[2] = hi[2] = positions[0*3+2];
-  for (size_t i=1; i<nPoints; ++i) {
-    if (positions[i*3+0] < lo[0]) lo[0] = positions[i*3+0];
-    if (positions[i*3+1] < lo[1]) lo[1] = positions[i*3+1];
-    if (positions[i*3+2] < lo[2]) lo[2] = positions[i*3+2];
-    if (positions[i*3+0] > hi[0]) hi[0] = positions[i*3+0];
-    if (positions[i*3+1] > hi[1]) hi[1] = positions[i*3+1];
-    if (positions[i*3+2] > hi[2]) hi[2] = positions[i*3+2];
-  }
 
-  std::fprintf(stderr, "min = %+0.2f, %+0.2f, %+0.2f\n", lo[0], lo[1], lo[2]);
-  std::fprintf(stderr, "max = %+0.2f, %+0.2f, %+0.2f\n", hi[0], hi[1], hi[2]);
+  std::fprintf(stderr, "nPoints = %lu\n", nPoints);
+  if (nPoints > 0) {
+    std::fprintf(stderr, "positions[0] = %+0.2f\n", positions[0]);
+    std::fprintf(stderr, "positions[1] = %+0.2f\n", positions[1]);
+    std::fprintf(stderr, "positions[2] = %+0.2f\n", positions[2]);
+
+    lo[0] = hi[0] = positions[0*3+0];
+    lo[1] = hi[1] = positions[0*3+1];
+    lo[2] = hi[2] = positions[0*3+2];
+    for (size_t i=1; i<nPoints; ++i) {
+      if (positions[i*3+0] < lo[0]) lo[0] = positions[i*3+0];
+      if (positions[i*3+1] < lo[1]) lo[1] = positions[i*3+1];
+      if (positions[i*3+2] < lo[2]) lo[2] = positions[i*3+2];
+      if (positions[i*3+0] > hi[0]) hi[0] = positions[i*3+0];
+      if (positions[i*3+1] > hi[1]) hi[1] = positions[i*3+1];
+      if (positions[i*3+2] > hi[2]) hi[2] = positions[i*3+2];
+    }
+
+    std::fprintf(stderr, "min = %+0.2f, %+0.2f, %+0.2f\n", lo[0], lo[1], lo[2]);
+    std::fprintf(stderr, "max = %+0.2f, %+0.2f, %+0.2f\n", hi[0], hi[1], hi[2]);
+  }
   
   if (!HasInitialized) {
     MPI_Comm_rank(comm, &CommRank);
@@ -244,7 +247,7 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
 
     Camera = ospNewCamera("perspective");
     ospSetFloat(Camera, "aspect", (float)Width / (float)Height);
-    ospSetVec3f(Camera, "position", hi[0]+1.0f, 0.0f, 0.0f);
+    ospSetVec3f(Camera, "position", 5.0f, 0.0f, 0.0f);
     ospSetVec3f(Camera, "direction", -1.0f, 0.0f, 0.0f);
     ospSetVec3f(Camera, "up", 0.0f, 1.0f, 0.0f);
     ospCommit(Camera);
@@ -281,13 +284,17 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, size_t nPoints, 
   ospCommit(Instance);
 
   WorldRegion.clear();
-  WorldRegion.insert(WorldRegion.end(), {
-    lo[0]-GeometryRadius, lo[1]-GeometryRadius, lo[2]-GeometryRadius,
-    hi[0]+GeometryRadius, hi[1]+GeometryRadius, hi[2]+GeometryRadius,
-  });
+  WorldRegionData = nullptr;
 
-  WorldRegionData = ospNewSharedData(WorldRegion.data(), OSP_BOX3F, WorldRegion.size() / 6);
-  ospCommit(WorldRegionData);
+  if (nPoints > 0) {
+    WorldRegion.insert(WorldRegion.end(), {
+      lo[0]-GeometryRadius, lo[1]-GeometryRadius, lo[2]-GeometryRadius,
+      hi[0]+GeometryRadius, hi[1]+GeometryRadius, hi[2]+GeometryRadius,
+    });
+
+    WorldRegionData = ospNewSharedData(WorldRegion.data(), OSP_BOX3F, WorldRegion.size() / 6);
+    ospCommit(WorldRegionData);
+  }
 
   ospSetObjectAsData(World, "instance", OSP_INSTANCE, Instance);
   ospSetObject(World, "region", WorldRegionData);
