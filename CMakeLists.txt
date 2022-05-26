@@ -48,7 +48,6 @@ PUBLIC
   ospray::ospray
 )
 
-
 install(
   TARGETS
     ospSensei
@@ -61,16 +60,32 @@ add_executable(
   app/nbody/nbody.cpp
 )
 
-
 target_link_libraries(
   nbody
-PUBLIC
-  ospSensei
+  PUBLIC
+    ospSensei
 )
-
 
 install(
   TARGETS
     nbody
+  COMPONENT bin
+)
+
+
+add_executable(
+  mandelbrot
+  app/mandelbrot/mandelbrot.cpp
+)
+
+target_link_libraries(
+  mandelbrot
+  PUBLIC
+    ospSensei
+)
+
+install(
+  TARGETS
+    mandelbrot
   COMPONENT bin
 )
