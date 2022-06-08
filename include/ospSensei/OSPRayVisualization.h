@@ -17,6 +17,7 @@ public:
   enum Type {
     PARTICLE,
     VOLUME,
+    ISOSURFACE,
   };
 
   static OSPRayVisualization *New();

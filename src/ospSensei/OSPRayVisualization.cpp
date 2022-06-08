@@ -96,6 +96,18 @@ struct OSPRayVisualization::InternalsType {
     OSPVolumetricModel VolumetricModel{nullptr};
   } Volume;
 
+  struct {
+    // isosurface config
+    float GeometryIsovalue{64};
+
+    // isosurface member
+    OSPData VolumeDataData{nullptr};
+    OSPVolume Volume{nullptr};
+    OSPGeometry Geometry{nullptr};
+    OSPMaterial Material{nullptr};
+    OSPGeometricModel GeometricModel{nullptr};
+  } Isosurface;
+
   OSPDevice Device{nullptr};
   OSPGroup Group{nullptr};
   OSPInstance Instance{nullptr};
@@ -148,13 +160,21 @@ void OSPRayVisualization::InternalsType::Initialize(MPI_Comm comm, OSPRayVisuali
   
   } else if (mode == OSPRayVisualization::VOLUME) {
     Volume.VolumetricModel = nullptr;
+
+  } else if (mode == OSPRayVisualization::ISOSURFACE) {
+    Isosurface.GeometricModel = nullptr;
   }
 
   Group = ospNewGroup();
   if (mode == OSPRayVisualization::PARTICLE) {
     ospSetObjectAsData(Group, "geometry", OSP_GEOMETRIC_MODEL, Particle.GeometricModel);
+
   } else if (mode == OSPRayVisualization::VOLUME) {
     //ospSetObjectAsData(Group, "volume", OSP_VOLUMETRIC_MODEL, Volume.VolumetricModel);
+
+  } else if (mode == OSPRayVisualization::ISOSURFACE) {
+    // ospSetObjectAsData(Group, "geometry", OSP_GEOMETRIC_MODEL, Isosurface.GeometricModel);
+
   }
   ospCommit(Group);
 
@@ -173,9 +193,9 @@ void OSPRayVisualization::InternalsType::Initialize(MPI_Comm comm, OSPRayVisuali
   ospSetObject(World, "region", WorldRegionData);
   ospCommit(World);
 
-  Camera = ospNewCamera("orthographic");
+  Camera = ospNewCamera("perspective");
   ospSetFloat(Camera, "aspect", (float)Width / (float)Height);
-  ospSetVec3f(Camera, "position", 0.0f, 0.0f, 5.0f);
+  ospSetVec3f(Camera, "position", 0.0f, 0.0f, 0.75f);
   ospSetVec3f(Camera, "direction", 0.0f, 0.0f, -1.0f);
   ospSetVec3f(Camera, "up", 0.0f, 1.0f, 0.0f);
   ospCommit(Camera);
@@ -208,6 +228,8 @@ bool OSPRayVisualization::Execute(sensei::DataAdaptor *data) {
   if (Mode == PARTICLE) {
     association = vtkDataObject::POINT;
   } else if (Mode == VOLUME) {
+    association = vtkDataObject::CELL;
+  } else if (Mode == ISOSURFACE) {
     association = vtkDataObject::CELL;
   } else {
     SENSEI_ERROR("Unexpected mode: " << Mode)//no semicolon
@@ -282,7 +304,7 @@ bool OSPRayVisualization::Execute(sensei::DataAdaptor *data) {
 
     return /*success=*/this->Internals->Execute(comm, Mode, nPoints, positions);
   
-  } else if (Mode == VOLUME) {
+  } else if (Mode == VOLUME || Mode == ISOSURFACE) {
     vtkUniformGridAMR *uniformGridAMR;
     uniformGridAMR = dynamic_cast<vtkUniformGridAMR *>(mesh);
     if (uniformGridAMR == nullptr) {
@@ -353,66 +375,101 @@ bool OSPRayVisualization::InternalsType::Execute(MPI_Comm comm, OSPRayVisualizat
   }
   std::fprintf(stderr, "lo = %u, hi = %u\n", lo, hi);
 
-  if (Volume.VolumeDataData) {
-    ospRelease(Volume.VolumeDataData);
-    Volume.VolumeDataData = nullptr;
+  if (mode == OSPRayVisualization::VOLUME) {
+    if (Volume.VolumeDataData) {
+      ospRelease(Volume.VolumeDataData);
+      Volume.VolumeDataData = nullptr;
+    }
+
+    Volume.VolumeDataData = ospNewSharedData(volume, OSP_USHORT, nx, 0, ny, 0, nz, 0);
+    ospCommit(Volume.VolumeDataData);
+
+    Volume.Volume = ospNewVolume("structuredRegular");
+    ospSetVec3f(Volume.Volume, "gridOrigin", -0.5f, -0.5f, -0.5f);
+    ospSetVec3f(Volume.Volume, "gridSpacing", 1.0f/(float)nx, 1.0f/(float)ny, 1.0f/(float)nz);
+    ospSetObject(Volume.Volume, "data", Volume.VolumeDataData);
+    ospSetBool(Volume.Volume, "cellCentered", 1);
+    ospCommit(Volume.Volume);
+
+    if (Volume.TransferFunctionColorData) {
+      ospRelease(Volume.TransferFunctionColorData);
+      Volume.TransferFunctionColorData = nullptr;
+    }
+
+    Volume.TransferFunctionColor.clear();
+    Volume.TransferFunctionColor.insert(Volume.TransferFunctionColor.end(), {
+      (CommRank % 3 == 0 ? 1.0f : 0.0f),
+      (CommRank % 3 == 1 ? 1.0f : 0.0f),
+      (CommRank % 3 == 2 ? 1.0f : 0.0f),
+      (CommRank % 3 == 0 ? 1.0f : 0.0f),
+      (CommRank % 3 == 1 ? 1.0f : 0.0f),
+      (CommRank % 3 == 2 ? 1.0f : 0.0f),
+    });
+
+    Volume.TransferFunctionColorData = ospNewSharedData(Volume.TransferFunctionColor.data(), OSP_VEC3F, Volume.TransferFunctionColor.size() / 3);
+    ospCommit(Volume.TransferFunctionColorData);
+
+    if (Volume.TransferFunctionOpacityData) {
+      ospRelease(Volume.TransferFunctionOpacityData);
+      Volume.TransferFunctionOpacityData = nullptr;
+    }
+
+    Volume.TransferFunctionOpacity.clear();
+    Volume.TransferFunctionOpacity.insert(Volume.TransferFunctionOpacity.end(), {
+      0.0f,
+      1.0f,
+    });
+
+    Volume.TransferFunctionOpacityData = ospNewSharedData(Volume.TransferFunctionOpacity.data(), OSP_FLOAT, Volume.TransferFunctionOpacity.size() / 1);
+    ospCommit(Volume.TransferFunctionOpacityData);
+
+    Volume.TransferFunction = ospNewTransferFunction("piecewiseLinear");
+    ospSetObject(Volume.TransferFunction, "color", Volume.TransferFunctionColorData);
+    ospSetObject(Volume.TransferFunction, "opacity", Volume.TransferFunctionOpacityData);
+    ospSetVec2f(Volume.TransferFunction, "valueRange", (float)0.0f, (float)hi);
+    ospCommit(Volume.TransferFunction);
+
+    Volume.VolumetricModel = ospNewVolumetricModel(nullptr);
+    ospSetObject(Volume.VolumetricModel, "volume", Volume.Volume);
+    ospSetObject(Volume.VolumetricModel, "transferFunction", Volume.TransferFunction);
+    ospCommit(Volume.VolumetricModel);
+
+    ospSetObjectAsData(Group, "volume", OSP_VOLUMETRIC_MODEL, Volume.VolumetricModel);
+    ospCommit(Group);
+  
+  } else if (mode == OSPRayVisualization::ISOSURFACE) {
+    if (Isosurface.VolumeDataData) {
+      ospRelease(Isosurface.VolumeDataData);
+      Isosurface.VolumeDataData = nullptr;
+    }
+
+    Isosurface.VolumeDataData = ospNewSharedData(volume, OSP_USHORT, nx, 0, ny, 0, nz, 0);
+    ospCommit(Isosurface.VolumeDataData);
+
+    Isosurface.Volume = ospNewVolume("structuredRegular");
+    ospSetVec3f(Isosurface.Volume, "gridOrigin", -0.5f, -0.5f, -0.5f);
+    ospSetVec3f(Isosurface.Volume, "gridSpacing", 1.0f/(float)nx, 1.0f/(float)ny, 1.0f/(float)nz);
+    ospSetObject(Isosurface.Volume, "data", Isosurface.VolumeDataData);
+    ospCommit(Isosurface.Volume);
+
+    Isosurface.Geometry = ospNewGeometry("isosurface");
+    ospSetFloat(Isosurface.Geometry, "isovalue", Isosurface.GeometryIsovalue);
+    ospSetObject(Isosurface.Geometry, "volume", Isosurface.Volume);
+    ospCommit(Isosurface.Geometry);
+
+    Isosurface.Material = ospNewMaterial(nullptr, "obj");
+    ospSetVec3f(Isosurface.Material, "kd", (CommRank % 4 == 0 ? 1.0f : 0.0f), (CommRank % 4 == 1 ? 1.0f : 0.0f), (CommRank % 4 == 2 ? 1.0f : 0.0f));
+    ospCommit(Isosurface.Material);
+
+    Isosurface.GeometricModel = ospNewGeometricModel(nullptr);
+    ospSetObject(Isosurface.GeometricModel, "geometry", Isosurface.Geometry);
+    ospSetObject(Isosurface.GeometricModel, "material", Isosurface.Material);
+    ospCommit(Isosurface.GeometricModel);
+
+    ospSetObjectAsData(Group, "geometry", OSP_GEOMETRIC_MODEL, Isosurface.GeometricModel);
+    ospCommit(Group);
+
   }
-
-  Volume.VolumeDataData = ospNewSharedData(volume, OSP_USHORT, nx, 0, ny, 0, nz, 0);
-  ospCommit(Volume.VolumeDataData);
-
-  Volume.Volume = ospNewVolume("structuredRegular");
-  ospSetVec3f(Volume.Volume, "gridOrigin", -0.5f, -0.5f, -0.5f);
-  ospSetVec3f(Volume.Volume, "gridSpacing", 1.0f/(float)nx, 1.0f/(float)ny, 1.0f/(float)nz);
-  ospSetObject(Volume.Volume, "data", Volume.VolumeDataData);
-  ospSetBool(Volume.Volume, "cellCentered", 1);
-  ospCommit(Volume.Volume);
-
-  if (Volume.TransferFunctionColorData) {
-    ospRelease(Volume.TransferFunctionColorData);
-    Volume.TransferFunctionColorData = nullptr;
-  }
-
-  Volume.TransferFunctionColor.clear();
-  Volume.TransferFunctionColor.insert(Volume.TransferFunctionColor.end(), {
-    (CommRank % 3 == 0 ? 1.0f : 0.0f),
-    (CommRank % 3 == 1 ? 1.0f : 0.0f),
-    (CommRank % 3 == 2 ? 1.0f : 0.0f),
-    (CommRank % 3 == 0 ? 1.0f : 0.0f),
-    (CommRank % 3 == 1 ? 1.0f : 0.0f),
-    (CommRank % 3 == 2 ? 1.0f : 0.0f),
-  });
-
-  Volume.TransferFunctionColorData = ospNewSharedData(Volume.TransferFunctionColor.data(), OSP_VEC3F, Volume.TransferFunctionColor.size() / 3);
-  ospCommit(Volume.TransferFunctionColorData);
-
-  if (Volume.TransferFunctionOpacityData) {
-    ospRelease(Volume.TransferFunctionOpacityData);
-    Volume.TransferFunctionOpacityData = nullptr;
-  }
-
-  Volume.TransferFunctionOpacity.clear();
-  Volume.TransferFunctionOpacity.insert(Volume.TransferFunctionOpacity.end(), {
-    0.0f,
-    1.0f,
-  });
-
-  Volume.TransferFunctionOpacityData = ospNewSharedData(Volume.TransferFunctionOpacity.data(), OSP_FLOAT, Volume.TransferFunctionOpacity.size() / 1);
-  ospCommit(Volume.TransferFunctionOpacityData);
-
-  Volume.TransferFunction = ospNewTransferFunction("piecewiseLinear");
-  ospSetObject(Volume.TransferFunction, "color", Volume.TransferFunctionColorData);
-  ospSetObject(Volume.TransferFunction, "opacity", Volume.TransferFunctionOpacityData);
-  ospSetVec2f(Volume.TransferFunction, "valueRange", (float)0.0f, (float)hi);
-  ospCommit(Volume.TransferFunction);
-
-  Volume.VolumetricModel = ospNewVolumetricModel(nullptr);
-  ospSetObject(Volume.VolumetricModel, "volume", Volume.Volume);
-  ospSetObject(Volume.VolumetricModel, "transferFunction", Volume.TransferFunction);
-  ospCommit(Volume.VolumetricModel);
-
-  ospSetObjectAsData(Group, "volume", OSP_VOLUMETRIC_MODEL, Volume.VolumetricModel);
-  ospCommit(Group);
 
   ospSetObject(Instance, "group", Group);
   ospCommit(Instance);

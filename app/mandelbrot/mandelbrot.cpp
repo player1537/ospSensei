@@ -181,6 +181,7 @@ int main(int argc, char **argv) {
   float opt_minx, opt_miny, opt_minz;
   float opt_maxx, opt_maxy, opt_maxz;
   size_t opt_nsteps;
+  std::string opt_mode;
 
   opt_nx = 8;
   opt_ny = 8;
@@ -194,6 +195,8 @@ int main(int argc, char **argv) {
   opt_maxz = +4.0f;
 
   opt_nsteps = 8;
+
+  opt_mode = "";
 
 #define ARGLOOP \
   if (char *ARGVAL=nullptr) \
@@ -217,6 +220,7 @@ int main(int argc, char **argv) {
   ARG("-maxy") opt_maxy = std::stof(ARGVAL);
   ARG("-maxz") opt_maxz = std::stof(ARGVAL);
   ARG("-nsteps") opt_nsteps = (size_t)std::stoull(ARGVAL);
+  ARG("-mode") opt_mode = ARGVAL;
 
 #undef ARG
 #undef ARGLOOP
@@ -226,6 +230,7 @@ int main(int argc, char **argv) {
   std::fprintf(stderr, "  %zu y values in range [%+0.2f, %+0.2f]\n", opt_ny, opt_miny, opt_maxy);
   std::fprintf(stderr, "  %zu z values in range [%+0.2f, %+0.2f]\n", opt_nz, opt_minz, opt_maxz);
   std::fprintf(stderr, "  %zu steps\n", opt_nsteps);
+  std::fprintf(stderr, "  %s mode\n", opt_mode.c_str());
 
   Mandelbrot mandelbrot(opt_nx, opt_ny, opt_nz, {
     opt_minx, opt_miny, opt_minz,
@@ -235,7 +240,11 @@ int main(int argc, char **argv) {
   using AnalysisAdaptor = ospSensei::OSPRayVisualization;
   vtkNew<AnalysisAdaptor> analysisAdaptor;
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
-  analysisAdaptor->SetMode(AnalysisAdaptor::VOLUME);
+  if (opt_mode == "isosurface") {
+    analysisAdaptor->SetMode(AnalysisAdaptor::ISOSURFACE);
+  } else if (opt_mode == "volume") {
+    analysisAdaptor->SetMode(AnalysisAdaptor::VOLUME);
+  }
   analysisAdaptor->SetMeshName("mandelbrot");
   analysisAdaptor->SetArrayName("nsteps");
   analysisAdaptor->Initialize();
