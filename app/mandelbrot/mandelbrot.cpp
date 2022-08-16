@@ -336,11 +336,11 @@ int main(int argc, char **argv) {
 #undef ARG
 #undef ARGLOOP
 
-  // std::fprintf(stderr, "Configuration:\n");
-  // std::fprintf(stderr, "  %zu x values in range [%+0.2f, %+0.2f]\n", opt_nx, opt_minx, opt_maxx);
-  // std::fprintf(stderr, "  %zu y values in range [%+0.2f, %+0.2f]\n", opt_ny, opt_miny, opt_maxy);
-  // std::fprintf(stderr, "  %zu z values in range [%+0.2f, %+0.2f]\n", opt_nz, opt_minz, opt_maxz);
-  // std::fprintf(stderr, "  %zu steps\n", opt_nsteps);
+  std::fprintf(stderr, "Configuration:\n");
+  std::fprintf(stderr, "  %zu x values in range [%+0.2f, %+0.2f]\n", opt_nx, opt_xmin, opt_xmax);
+  std::fprintf(stderr, "  %zu y values in range [%+0.2f, %+0.2f]\n", opt_ny, opt_ymin, opt_ymax);
+  std::fprintf(stderr, "  %zu z values in range [%+0.2f, %+0.2f]\n", opt_nz, opt_zmin, opt_zmax);
+  std::fprintf(stderr, "  %zu steps\n", opt_nsteps);
 
   std::vector<Assignment> assignments;
   for (size_t i=0, xi=0; xi<opt_nxcuts; ++xi) {
@@ -364,6 +364,7 @@ int main(int argc, char **argv) {
       }));
     }
   }
+  assert(("later code expects the mandelbrots array to be non-empty", mandelbrots.size() > 0));
 
   using AnalysisAdaptor = ospSensei::OSPRayUnstructuredVolumeVisualization;
   vtkNew<AnalysisAdaptor> analysisAdaptor;
@@ -374,13 +375,15 @@ int main(int argc, char **argv) {
   analysisAdaptor->SetHeight(opt_height);
   analysisAdaptor->Initialize();
 
+ready:
+
   for (size_t iter=0; iter<1; ++iter) {
     for (size_t i=0; i<mandelbrots.size(); ++i) {
       mandelbrots[i].step(opt_nsteps);
 
       if (i == 0 && opt_rank == 0) {
         if (opt_nx * opt_ny * opt_nx < 1024UL) {
-          mandelbrots[i].debug(Mandelbrot::OnlyNsteps);
+          mandelbrots[i].debug(Mandelbrot::OnlyData);
         }
       }
     }
@@ -391,7 +394,7 @@ int main(int argc, char **argv) {
       unstructuredGrid = mandelbrots[i].vtk(unstructuredGrid);
     }
     unstructuredGrid->GetCellData()->SetActiveScalars("nsteps");
-
+    unstructuredGrid->EditableOff();
 
     using DataAdaptor = sensei::VTKDataAdaptor;
     vtkNew<DataAdaptor> dataAdaptor;
@@ -399,6 +402,7 @@ int main(int argc, char **argv) {
     dataAdaptor->SetDataTimeStep(iter * opt_nsteps);
     dataAdaptor->SetDataObject("mandelbrot", unstructuredGrid);
 
+    analysisAdaptor->SetUseD3(opt_enable_d3);
     analysisAdaptor->Execute(dataAdaptor);
 
     dataAdaptor->ReleaseData();
@@ -407,7 +411,7 @@ int main(int argc, char **argv) {
   analysisAdaptor->Finalize();
   analysisAdaptor.Reset();
 
-  MPI_Finalize();
+  // MPI_Finalize();
 
   return 0;
 }

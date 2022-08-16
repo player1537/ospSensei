@@ -25,7 +25,12 @@
 #include <vtkDoubleArray.h>
 #include <vtkFloatArray.h>
 #include <vtkIdTypeArray.h>
+#include <vtkMPI.h>
+#include <vtkMPICommunicator.h>
+#include <vtkMPIController.h>
 #include <vtkMultiBlockDataSet.h>
+#include <vtkPDistributedDataFilter.h>
+#include <vtkPKdTree.h>
 #include <vtkPointData.h>
 #include <vtkPolyData.h>
 #include <vtkUnsignedCharArray.h>
@@ -69,7 +74,7 @@ static void writePPM(const char *fileName, int size_x, int size_y, const uint32_
 //---
 
 struct OSPRayUnstructuredVolumeVisualization::InternalsType : public vtkObject {
-  virtual InternalsType *New();
+  static InternalsType *New();
 
 
   //--- Before Initialize()...
@@ -334,10 +339,10 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
   WorldRegion.clear();
   WorldRegionData = nullptr;
 
- WorldRegion.insert(WorldRegion.end(), {
-   Bounds[0], Bounds[1], Bounds[2],
-   Bounds[3], Bounds[4], Bounds[5],
- });
+  WorldRegion.insert(WorldRegion.end(), {
+    Bounds[0], Bounds[1], Bounds[2], // xmin, ymin, zmin
+    Bounds[3], Bounds[4], Bounds[5], // xmax, ymax, zmax
+  });
 
   WorldRegionData = ospNewSharedData(WorldRegion.data(), OSP_BOX3F, WorldRegion.size() / 6);
   ospCommit(WorldRegionData);
@@ -478,19 +483,55 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
     return /*success=*/false;
   }
 
+  unstructuredGrid->Register(this);
+
+  if (UseD3) {
+    MPI_Comm comm = GetCommunicator();
+
+    using OpaqueComm = vtkMPICommunicatorOpaqueComm;
+    OpaqueComm *opaque = new OpaqueComm(&comm);
+
+    using Communicator = vtkMPICommunicator;
+    vtkNew<Communicator> communicator;
+    communicator->InitializeExternal(opaque);
+
+    delete opaque;
+    opaque = nullptr;
+
+    using Controller = vtkMPIController;
+    vtkNew<Controller> controller;
+    controller->Initialize();
+    controller->SetCommunicator(communicator);
+
+    using Filter = vtkPDistributedDataFilter;
+    vtkNew<Filter> filter;
+    filter->GetKdtree()->AssignRegionsRoundRobin();
+    filter->SetInputData(unstructuredGrid);
+    filter->SetBoundaryMode(0);
+    filter->SetUseMinimalMemory(1);
+    filter->SetMinimumGhostLevel(0);
+    filter->RetainKdtreeOn();
+
+    filter->Update();
+
+    unstructuredGrid->UnRegister(this);
+    unstructuredGrid = UnstructuredGrid::SafeDownCast(filter->GetOutput());
+    unstructuredGrid->Register(this);
+  }
+
   this->Internals->SetCommunicator(GetCommunicator());
 
   {
-    double boundsDouble[6]; // xmin, xmax, ymin, ymax, zmin, zmax
+    unstructuredGrid->GetPoints()->Modified();
+    double boundsDouble[6] = { 0.373737f, 0.373737f, 0.373737f, 0.373737f, 0.373737f, 0.373737f }; // xmin, xmax, ymin, ymax, zmin, zmax
     unstructuredGrid->GetBounds(boundsDouble);
-    float boundsFloat[6] = {
-      static_cast<float>(boundsDouble[0]), // xmin
-      static_cast<float>(boundsDouble[2]), // ymin
-      static_cast<float>(boundsDouble[4]), // zmin
-      static_cast<float>(boundsDouble[1]), // xmax
-      static_cast<float>(boundsDouble[3]), // ymax
-      static_cast<float>(boundsDouble[5]), // zmax
-    };
+    float boundsFloat[6] = { 0.37373f, 0.373737f, 0.373737f, 0.373737f, 0.373737f, 0.373737f };
+    boundsFloat[0] = static_cast<float>(boundsDouble[0]); // xmin
+    boundsFloat[1] = static_cast<float>(boundsDouble[2]); // ymin
+    boundsFloat[2] = static_cast<float>(boundsDouble[4]); // zmin
+    boundsFloat[3] = static_cast<float>(boundsDouble[1]); // xmax
+    boundsFloat[4] = static_cast<float>(boundsDouble[3]); // ymax
+    boundsFloat[5] = static_cast<float>(boundsDouble[5]); // zmax
     this->Internals->SetBounds(boundsFloat);
   }
 
@@ -584,6 +625,8 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
     std::fprintf(stderr, "Error: %s\n", error);
     return /*success=*/false;
   }
+
+  unstructuredGrid->UnRegister(this);
 
   return /*success=*/true;
 }
