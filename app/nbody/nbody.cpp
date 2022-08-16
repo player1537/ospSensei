@@ -21,7 +21,7 @@
 #include <vtkPolyData.h>
 
 // ospSensei
-#include <ospSensei/OSPRayVisualization.h>
+#include <ospSensei/OSPRayParticleVisualization.h>
 
 #define SOFTENING 1e-9f
 
@@ -260,9 +260,13 @@ int main(int argc, char** argv) {
   bounds[3*0+1] = (float)(rank + 0) / (float)size;
   bounds[3*1+1] = (float)(rank + 1) / (float)size;
 
-  vtkNew<ospSensei::OSPRayVisualization> analysisAdaptor;
+  vtkNew<ospSensei::OSPRayParticleVisualization> analysisAdaptor;
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
+  analysisAdaptor->SetWidth(512);
+  analysisAdaptor->SetHeight(512);
   analysisAdaptor->Initialize();
+  analysisAdaptor->SetMeshName("bodies");
+  analysisAdaptor->SetArrayName("position");
 
   for (int iter = 0; iter <= nIters; ++iter) {
     SENSEI_STATUS("On iteration " << iter)//no semicolon

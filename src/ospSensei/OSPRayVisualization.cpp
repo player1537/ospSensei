@@ -86,14 +86,6 @@ struct OSPRayVisualization::InternalsType {
 
   struct {
     // volume member
-    OSPData VolumeDataData{nullptr};
-    OSPVolume Volume{nullptr};
-    std::vector<float> TransferFunctionColor;
-    OSPData TransferFunctionColorData{nullptr};
-    std::vector<float> TransferFunctionOpacity;
-    OSPData TransferFunctionOpacityData{nullptr};
-    OSPTransferFunction TransferFunction{nullptr};
-    OSPVolumetricModel VolumetricModel{nullptr};
   } Volume;
 
   struct {

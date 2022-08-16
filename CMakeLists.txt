@@ -28,7 +28,8 @@ find_package(
 add_library(
   ospSensei
 SHARED
-  src/ospSensei/OSPRayVisualization.cpp
+  src/ospSensei/OSPRayParticleVisualization.cpp
+  src/ospSensei/OSPRayUnstructuredVolumeVisualization.cpp
 )
 
 
@@ -74,18 +75,18 @@ install(
 
 
 add_executable(
-  mandelbrot
-  app/mandelbrot/mandelbrot.cpp
+ mandelbrot
+ app/mandelbrot/mandelbrot.cpp
 )
 
 target_link_libraries(
-  mandelbrot
-  PUBLIC
-    ospSensei
+ mandelbrot
+ PUBLIC
+   ospSensei
 )
 
 install(
-  TARGETS
-    mandelbrot
-  COMPONENT bin
+ TARGETS
+   mandelbrot
+ COMPONENT bin
 )

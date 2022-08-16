@@ -10,18 +10,30 @@
 // vtk
 #include <vtkCellData.h>
 #include <vtkDataObject.h>
+#include <vtkDoubleArray.h>
+#include <vtkFloatArray.h>
+#include <vtkHexahedron.h>
+#include <vtkInformation.h>
+#include <vtkMPIController.h>
+#include <vtkMultiProcessController.h>
 #include <vtkNew.h>
+#include <vtkObjectFactoryCollection.h>
+#include <vtkPDistributedDataFilter.h>
+#include <vtkPiecewiseFunction.h>
+#include <vtkPKdTree.h>
 #include <vtkSmartPointer.h>
-#include <vtkUniformGrid.h>
-#include <vtkUniformGridAMR.h>
+#include <vtkTimerLog.h>
 #include <vtkUnsignedShortArray.h>
+#include <vtkUnstructuredGrid.h>
 
 // sensei
 #include <VTKDataAdaptor.h>
 
 // ospSensei
-#include <ospSensei/OSPRayVisualization.h>
+#include <ospSensei/OSPRayUnstructuredVolumeVisualization.h>
 
+
+//---
 
 struct Mandelbrot {
   using ScalarF = float;
@@ -32,17 +44,21 @@ struct Mandelbrot {
 
   enum Debug { OnlyData, OnlyNsteps };
 
+  Mandelbrot() = default;
+  Mandelbrot(Mandelbrot &) = delete;
+  Mandelbrot(Mandelbrot &&) = default;
   Mandelbrot(size_t nx_, size_t ny_, size_t nz_, BoundsF bounds_);
-  ~Mandelbrot();
+  Mandelbrot &operator=(Mandelbrot &) = delete;
+  ~Mandelbrot() = default;
 
   void debug(Debug);
   void step(size_t dt);
-  vtkUniformGrid *vtk();
+  vtkUnstructuredGrid *vtk(vtkUnstructuredGrid *unstructuredGrid=nullptr);
 
-  size_t nx, ny, nz;
-  BoundsF bounds;
-  ScalarF *data;
-  ScalarU *nsteps;
+  size_t nx{0}, ny{0}, nz{0};
+  BoundsF bounds{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+  std::vector<ScalarF> data{};
+  std::vector<ScalarU> nsteps{};
 };
 
 Mandelbrot::Mandelbrot(size_t nx_, size_t ny_, size_t nz_, Mandelbrot::BoundsF bounds_)
@@ -50,8 +66,8 @@ Mandelbrot::Mandelbrot(size_t nx_, size_t ny_, size_t nz_, Mandelbrot::BoundsF b
   , ny(ny_)
   , nz(nz_)
   , bounds(bounds_)
-  , data(new ScalarF[2*nx_*ny_*nz_])
-  , nsteps(new ScalarU[nx_*ny_*nz_])
+  , data(2*nx_*ny_*nz_)
+  , nsteps(nx_*ny_*nz_)
 {
   for (size_t zi=0; zi<nz; ++zi) {
     size_t zindex = zi*ny*nx;
@@ -70,12 +86,11 @@ Mandelbrot::Mandelbrot(size_t nx_, size_t ny_, size_t nz_, Mandelbrot::BoundsF b
   }
 }
 
-Mandelbrot::~Mandelbrot() {
-  delete[] nsteps;
-  delete[] data;
-}
-
 void Mandelbrot::debug(Debug which) {
+  if (nx > 16 || ny > 16 || nz > 16) {
+    return;
+  }
+
   for (size_t zi=0; zi<nz; ++zi) {
     size_t zindex = zi*ny*nx;
 
@@ -107,17 +122,17 @@ void Mandelbrot::debug(Debug which) {
 void Mandelbrot::step(size_t dt) {
   for (size_t zi=0; zi<nz; ++zi) {
     ScalarF zratio = (ScalarF)zi / (ScalarF)nz;
-    ScalarF z = std::get<MinZ>(bounds) * zratio + std::get<MaxZ>(bounds) * (1.0f - zratio);
+    ScalarF z = std::get<MinZ>(bounds) + zratio * (std::get<MaxZ>(bounds) - std::get<MinZ>(bounds));
     size_t zindex = zi*ny*nx;
 
     for (size_t yi=0; yi<ny; ++yi) {
       ScalarF yratio = (ScalarF)yi / (ScalarF)ny;
-      ScalarF y = std::get<MinY>(bounds) * yratio + std::get<MaxY>(bounds) * (1.0f - yratio);
+      ScalarF y = std::get<MinY>(bounds) + yratio * (std::get<MaxY>(bounds) - std::get<MinY>(bounds));
       size_t yindex = zindex + yi*nx;
 
       for (size_t xi=0; xi<nx; ++xi) {
         ScalarF xratio = (ScalarF)xi / (ScalarF)nx;
-        ScalarF x = std::get<MinX>(bounds) * xratio + std::get<MaxX>(bounds) * (1.0f - xratio);
+        ScalarF x = std::get<MinX>(bounds) + xratio * (std::get<MaxX>(bounds) - std::get<MinX>(bounds));
         size_t xindex = yindex + xi;
 
         for (size_t ti=0; ti<dt; ++ti) {
@@ -138,65 +153,153 @@ void Mandelbrot::step(size_t dt) {
   }
 }
 
-vtkUniformGrid *Mandelbrot::vtk() {
-  vtkNew<vtkUnsignedShortArray> unsignedShortArray;
-  unsignedShortArray->SetName("nsteps");
-  unsignedShortArray->SetArray(nsteps, nx*ny*nz, 1);
+vtkUnstructuredGrid *Mandelbrot::vtk(vtkUnstructuredGrid *unstructuredGrid) {
+  using Points = vtkPoints;
+  using Array = vtkUnsignedShortArray;
 
-  vtkUniformGrid *uniformGrid = vtkUniformGrid::New();
-  uniformGrid->SetOrigin(
-    std::get<MinX>(bounds),
-    std::get<MinY>(bounds),
-    std::get<MinZ>(bounds));
-  uniformGrid->SetSpacing(
-    (std::get<MaxX>(bounds) - std::get<MinX>(bounds)) / (float)nx,
-    (std::get<MaxY>(bounds) - std::get<MinY>(bounds)) / (float)ny,
-    (std::get<MaxZ>(bounds) - std::get<MinZ>(bounds)) / (float)nz);
-  uniformGrid->SetDimensions(nx, ny, nz);
-  uniformGrid->GetCellData()->SetScalars(unsignedShortArray);
-  uniformGrid->GetCellData()->SetActiveScalars("nsteps");
+  Points *points;
+  Array *array;
 
-  return uniformGrid;
+  if (unstructuredGrid == nullptr) {
+    points = Points::New(VTK_DOUBLE);
+
+    array = Array::New();
+    array->SetName("nsteps");
+
+    unstructuredGrid = vtkUnstructuredGrid::New();
+    unstructuredGrid->EditableOn();
+    unstructuredGrid->GetCellData()->AddArray(array);
+    unstructuredGrid->SetPoints(points);
+
+  } else {
+    points = unstructuredGrid->GetPoints();
+
+    array = Array::SafeDownCast(unstructuredGrid->GetCellData()->GetAbstractArray("nsteps"));
+  }
+
+  using IdType = vtkIdType;
+
+  using Cell = vtkHexahedron;
+  vtkNew<Cell> cell;
+
+  for (size_t i=0, zi=0; zi<nz; ++zi) {
+    ScalarF z0ratio = (ScalarF)(zi + 0) / (ScalarF)nz;
+    ScalarF z0 = std::get<MinZ>(bounds) + z0ratio * (std::get<MaxZ>(bounds) - std::get<MinZ>(bounds));
+    ScalarF z1ratio = (ScalarF)(zi + 1) / (ScalarF)nz;
+    ScalarF z1 = std::get<MinZ>(bounds) + z1ratio * (std::get<MaxZ>(bounds) - std::get<MinZ>(bounds));
+    size_t zindex = zi*ny*nx;
+    assert(("the later code expects z0 < z1, so sanity check here", z0 < z1));
+
+    for (size_t yi=0; yi<ny; ++yi) {
+      ScalarF y0ratio = (ScalarF)(yi + 0) / (ScalarF)ny;
+      ScalarF y0 = std::get<MinY>(bounds) + y0ratio * (std::get<MaxY>(bounds) - std::get<MinY>(bounds));
+      ScalarF y1ratio = (ScalarF)(yi + 1) / (ScalarF)ny;
+      ScalarF y1 = std::get<MinY>(bounds) + y1ratio * (std::get<MaxY>(bounds) - std::get<MinY>(bounds));
+      size_t yindex = zindex + yi*nx;
+      assert(("the later code expects y0 < y1, so sanity check here", y0 < y1));
+
+      for (size_t xi=0; xi<nx; ++xi, ++i) {
+        ScalarF x0ratio = (ScalarF)(xi + 0) / (ScalarF)nx;
+        ScalarF x0 = std::get<MinX>(bounds) + x0ratio * (std::get<MaxX>(bounds) - std::get<MinX>(bounds));
+        ScalarF x1ratio = (ScalarF)(xi + 1) / (ScalarF)nx;
+        ScalarF x1 = std::get<MinX>(bounds) + x1ratio * (std::get<MaxX>(bounds) - std::get<MinX>(bounds));
+        size_t xindex = yindex + xi;
+        assert(("the later code expects x0 < x1, so sanity check here", x0 < x1));
+
+        cell->GetPointIds()->SetId(0, points->InsertNextPoint(x0, y0, z0));
+        cell->GetPointIds()->SetId(1, points->InsertNextPoint(x1, y0, z0));
+        cell->GetPointIds()->SetId(2, points->InsertNextPoint(x1, y1, z0));
+        cell->GetPointIds()->SetId(3, points->InsertNextPoint(x0, y1, z0));
+        cell->GetPointIds()->SetId(4, points->InsertNextPoint(x0, y0, z1));
+        cell->GetPointIds()->SetId(5, points->InsertNextPoint(x1, y0, z1));
+        cell->GetPointIds()->SetId(6, points->InsertNextPoint(x1, y1, z1));
+        cell->GetPointIds()->SetId(7, points->InsertNextPoint(x0, y1, z1));
+
+        array->InsertNextValue(nsteps[xindex]);
+
+        unstructuredGrid->InsertNextCell(cell->GetCellType(), cell->GetPointIds());
+      }
+    }
+  }
+
+  return unstructuredGrid;
 }
 
+//---
+
+struct Assignment {
+  Assignment() = default;
+  ~Assignment() = default;
+
+  size_t rank{0};
+  size_t xindex{0};
+  size_t yindex{0};
+  size_t zindex{0};
+};
+
+
+//---
 
 int main(int argc, char **argv) {
   int provided;
   int success = MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
   if (success != MPI_SUCCESS) {
-    SENSEI_ERROR("Error while initializing MPI")//no semicolon
+    fprintf(stderr, "Error while initializing MPI\n");
     return 1;
   }
 
   if (provided != MPI_THREAD_MULTIPLE) {
-    SENSEI_ERROR("MPI provided the wrong level of thread support")//no semicolon
+    fprintf(stderr, "MPI provided the wrong level of thread support\n");
     return 1;
   }
 
-  int size, rank;
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  using Controller = vtkMPIController;
+  vtkNew<Controller> controller;
+  controller->Initialize(&argc, &argv, /* initializedExternally= */1);
+  struct guard {
+    guard(Controller *c) { vtkMultiProcessController::SetGlobalController(c); };
+    ~guard() { vtkMultiProcessController::GetGlobalController()->Finalize(/* finalizedExternally= */1); };
+  } guard(controller);
 
-  size_t opt_nx, opt_ny, opt_nz;
-  float opt_minx, opt_miny, opt_minz;
-  float opt_maxx, opt_maxy, opt_maxz;
+  size_t opt_rank;
+  size_t opt_nprocs;
+  size_t opt_nx;
+  size_t opt_ny;
+  size_t opt_nz;
+  size_t opt_nxcuts;
+  size_t opt_nycuts;
+  size_t opt_nzcuts;
   size_t opt_nsteps;
-  std::string opt_mode;
+  float opt_xmin;
+  float opt_ymin;
+  float opt_zmin;
+  float opt_xmax;
+  float opt_ymax;
+  float opt_zmax;
+  bool opt_enable_d3;
+  int opt_width;
+  int opt_height;
+  int opt_spp;
 
-  opt_nx = 8;
-  opt_ny = 8;
-  opt_nz = 8;
-
-  opt_minx = -2.0f;
-  opt_miny = -2.0f;
-  opt_minz = +2.0f;
-  opt_maxx = +2.0f;
-  opt_maxy = +2.0f;
-  opt_maxz = +4.0f;
-
-  opt_nsteps = 8;
-
-  opt_mode = "";
+  opt_rank = controller->GetLocalProcessId();
+  opt_nprocs = controller->GetNumberOfProcesses();
+  opt_nx = 16;
+  opt_ny = 16;
+  opt_nz = 16;
+  opt_nxcuts = 1;
+  opt_nycuts = 1;
+  opt_nzcuts = 1;
+  opt_nsteps = 16;
+  opt_xmin = -2.0f;
+  opt_ymin = -2.0f;
+  opt_zmin = 2.0f;
+  opt_xmax = +2.0f;
+  opt_ymax = +2.0f;
+  opt_zmax = 4.0f;
+  opt_enable_d3 = false;
+  opt_width = 256;
+  opt_height = 256;
+  opt_spp = 1;
 
 #define ARGLOOP \
   if (char *ARGVAL=nullptr) \
@@ -210,66 +313,91 @@ int main(int argc, char **argv) {
       else if (strncmp(argv[ARGIND], s, sizeof(s)) == 0 && ++ARGIND < argc && (ARGVAL = argv[ARGIND], 1))
 
   ARGLOOP
+  ARG("-rank") opt_rank = (size_t)std::stoull(ARGVAL);
+  ARG("-nprocs") opt_nprocs = (size_t)std::stoull(ARGVAL);
   ARG("-nx") opt_nx = (size_t)std::stoull(ARGVAL);
   ARG("-ny") opt_ny = (size_t)std::stoull(ARGVAL);
   ARG("-nz") opt_nz = (size_t)std::stoull(ARGVAL);
-  ARG("-minx") opt_minx = std::stof(ARGVAL);
-  ARG("-miny") opt_miny = std::stof(ARGVAL);
-  ARG("-minz") opt_minz = std::stof(ARGVAL);
-  ARG("-maxx") opt_maxx = std::stof(ARGVAL);
-  ARG("-maxy") opt_maxy = std::stof(ARGVAL);
-  ARG("-maxz") opt_maxz = std::stof(ARGVAL);
+  ARG("-nxcuts") opt_nxcuts = (size_t)std::stoull(ARGVAL);
+  ARG("-nycuts") opt_nycuts = (size_t)std::stoull(ARGVAL);
+  ARG("-nzcuts") opt_nzcuts = (size_t)std::stoull(ARGVAL);
   ARG("-nsteps") opt_nsteps = (size_t)std::stoull(ARGVAL);
-  ARG("-mode") opt_mode = ARGVAL;
+  ARG("-xmin") opt_xmin = std::stof(ARGVAL);
+  ARG("-ymin") opt_ymin = std::stof(ARGVAL);
+  ARG("-zmin") opt_zmin = std::stof(ARGVAL);
+  ARG("-xmax") opt_xmax = std::stof(ARGVAL);
+  ARG("-ymax") opt_ymax = std::stof(ARGVAL);
+  ARG("-zmax") opt_zmax = std::stof(ARGVAL);
+  ARG("-d3") opt_enable_d3 = (bool)std::stoi(ARGVAL);
+  ARG("-width") opt_width = std::stoi(ARGVAL);
+  ARG("-height") opt_height = std::stoi(ARGVAL);
+  ARG("-spp") opt_spp = std::stoi(ARGVAL);
 
 #undef ARG
 #undef ARGLOOP
 
-  std::fprintf(stderr, "Configuration:\n");
-  std::fprintf(stderr, "  %zu x values in range [%+0.2f, %+0.2f]\n", opt_nx, opt_minx, opt_maxx);
-  std::fprintf(stderr, "  %zu y values in range [%+0.2f, %+0.2f]\n", opt_ny, opt_miny, opt_maxy);
-  std::fprintf(stderr, "  %zu z values in range [%+0.2f, %+0.2f]\n", opt_nz, opt_minz, opt_maxz);
-  std::fprintf(stderr, "  %zu steps\n", opt_nsteps);
-  std::fprintf(stderr, "  %s mode\n", opt_mode.c_str());
+  // std::fprintf(stderr, "Configuration:\n");
+  // std::fprintf(stderr, "  %zu x values in range [%+0.2f, %+0.2f]\n", opt_nx, opt_minx, opt_maxx);
+  // std::fprintf(stderr, "  %zu y values in range [%+0.2f, %+0.2f]\n", opt_ny, opt_miny, opt_maxy);
+  // std::fprintf(stderr, "  %zu z values in range [%+0.2f, %+0.2f]\n", opt_nz, opt_minz, opt_maxz);
+  // std::fprintf(stderr, "  %zu steps\n", opt_nsteps);
 
-  Mandelbrot mandelbrot(opt_nx, opt_ny, opt_nz, {
-    opt_minx, opt_miny, opt_minz,
-    opt_maxx, opt_maxy, opt_maxz,
-  });
+  std::vector<Assignment> assignments;
+  for (size_t i=0, xi=0; xi<opt_nxcuts; ++xi) {
+    for (size_t yi=0; yi<opt_nycuts; ++yi) {
+      for (size_t zi=0; zi<opt_nzcuts; ++zi, ++i) {
+        assignments.emplace_back(std::move(Assignment{i % opt_nprocs, xi, yi, zi}));
+      }
+    }
+  }
 
-  using AnalysisAdaptor = ospSensei::OSPRayVisualization;
+  std::vector<Mandelbrot> mandelbrots;
+  for (size_t i=0; i<assignments.size(); ++i) {
+    if (assignments[i].rank == opt_rank) {
+      mandelbrots.emplace_back(opt_nx, opt_ny, opt_nz, Mandelbrot::BoundsF({
+        opt_xmin + (opt_xmax - opt_xmin) / opt_nxcuts * (assignments[i].xindex + 0),
+        opt_ymin + (opt_ymax - opt_ymin) / opt_nycuts * (assignments[i].yindex + 0),
+        opt_zmin + (opt_zmax - opt_zmin) / opt_nzcuts * (assignments[i].zindex + 0),
+        opt_xmin + (opt_xmax - opt_xmin) / opt_nxcuts * (assignments[i].xindex + 1),
+        opt_ymin + (opt_ymax - opt_ymin) / opt_nycuts * (assignments[i].yindex + 1),
+        opt_zmin + (opt_zmax - opt_zmin) / opt_nzcuts * (assignments[i].zindex + 1),
+      }));
+    }
+  }
+
+  using AnalysisAdaptor = ospSensei::OSPRayUnstructuredVolumeVisualization;
   vtkNew<AnalysisAdaptor> analysisAdaptor;
   analysisAdaptor->SetCommunicator(MPI_COMM_WORLD);
-  if (opt_mode == "isosurface") {
-    analysisAdaptor->SetMode(AnalysisAdaptor::ISOSURFACE);
-  } else if (opt_mode == "volume") {
-    analysisAdaptor->SetMode(AnalysisAdaptor::VOLUME);
-  }
   analysisAdaptor->SetMeshName("mandelbrot");
   analysisAdaptor->SetArrayName("nsteps");
+  analysisAdaptor->SetWidth(opt_width);
+  analysisAdaptor->SetHeight(opt_height);
   analysisAdaptor->Initialize();
 
   for (size_t iter=0; iter<1; ++iter) {
-    mandelbrot.step(opt_nsteps);
+    for (size_t i=0; i<mandelbrots.size(); ++i) {
+      mandelbrots[i].step(opt_nsteps);
 
-    if (rank == 0) {
-      if (opt_nx * opt_ny * opt_nx < 1024UL) {
-        mandelbrot.debug(Mandelbrot::OnlyNsteps);
+      if (i == 0 && opt_rank == 0) {
+        if (opt_nx * opt_ny * opt_nx < 1024UL) {
+          mandelbrots[i].debug(Mandelbrot::OnlyNsteps);
+        }
       }
     }
 
-    vtkSmartPointer<vtkUniformGrid> uniformGrid = mandelbrot.vtk();
+    using UnstructuredGrid = vtkUnstructuredGrid;
+    vtkSmartPointer<UnstructuredGrid> unstructuredGrid = nullptr;
+    for (size_t i=0; i<mandelbrots.size(); ++i) {
+      unstructuredGrid = mandelbrots[i].vtk(unstructuredGrid);
+    }
+    unstructuredGrid->GetCellData()->SetActiveScalars("nsteps");
 
-    vtkNew<vtkUniformGridAMR> uniformGridAMR;
-    int blocksPerLevel[] = { size };
-    uniformGridAMR->Initialize(1 /* nLevels */, blocksPerLevel);
-    uniformGridAMR->SetDataSet(0 /* levels */, rank /* index */, uniformGrid);
 
     using DataAdaptor = sensei::VTKDataAdaptor;
     vtkNew<DataAdaptor> dataAdaptor;
     dataAdaptor->SetDataTime(iter);
     dataAdaptor->SetDataTimeStep(iter * opt_nsteps);
-    dataAdaptor->SetDataObject("mandelbrot", uniformGridAMR);
+    dataAdaptor->SetDataObject("mandelbrot", unstructuredGrid);
 
     analysisAdaptor->Execute(dataAdaptor);
 
