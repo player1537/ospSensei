@@ -71,13 +71,13 @@ static void writePPM(const char *fileName, int size_x, int size_y, const uint32_
 }
 
 
-//---
+//--- "InternalsType" manages OSPRay API.
 
 struct OSPRayUnstructuredVolumeVisualization::InternalsType : public vtkObject {
   static InternalsType *New();
 
 
-  //--- Before Initialize()...
+  //--- Set these before calling Initialize().
 
 private:
   MPI_Comm Communicator;
@@ -95,7 +95,7 @@ public:
   char const *Initialize();
 
 
-  //--- Before Execute()...
+  //--- Set these before calling Execute().
 
 private:
   float Bounds[6];
@@ -171,12 +171,16 @@ private:
   OSPFrameBuffer FrameBuffer{nullptr};
   OSPFuture Future{nullptr};
 
+
+  //--- Execute()...
+
 public:
   char const *Execute();
 
 
   //--- For Finalize()...
 
+public:
   char const *Finalize();
 };
 
@@ -187,11 +191,17 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Initialize() {
   MPI_Comm_rank(Communicator, &rank);
   MPI_Comm_size(Communicator, &size);
 
+
+  //--- Initialize OSPRay.
+
   ospLoadModule("mpi");
 
   Device = ospNewDevice("mpiDistributed");
   ospDeviceCommit(Device);
   ospSetCurrentDevice(Device);
+
+
+  //--- Setup initial scene graph.
 
   Group = ospNewGroup();
   ospCommit(Group);
@@ -235,6 +245,9 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
   MPI_Comm_rank(Communicator, &rank);
   MPI_Comm_size(Communicator, &size);
 
+
+  //--- Preprocess cell data to get the OSPRay transfer function's value range.
+
   float lo, hi;
   lo = hi = CellDataData[0];
   for (size_t i=1; i<CellDataSize; ++i) {
@@ -242,6 +255,9 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
     if (CellDataData[i] > hi) hi = CellDataData[i];
   }
   std::fprintf(stderr, "lo = %f, hi = %f\n", lo, hi);
+
+
+  //--- Allocate OSPData objects for OSPRay volume properties.
 
 # define RESET(m_Data)                                                         \
   do {                                                                         \
@@ -287,6 +303,9 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
   ospSetObject(Volume, "cell.type", VolumeCellTypeData);
   ospSetFloat(Volume, "background", 0.0f);
   ospCommit(Volume);
+
+
+  //--- Setup rest of scene graph now that the OSPVolume is created.
 
   if (TransferFunctionColorData) {
     ospRelease(TransferFunctionColorData);
@@ -356,6 +375,9 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
   ospRelease(Future);
   Future = nullptr;
 
+
+  //--- Output renderered framebuffer to disk.
+
   if (rank == 0) {
     std::string filename = std::string("ospSensei.") + std::to_string(FrameNumber) + std::string(".ppm");
     const void *fb = ospMapFrameBuffer(FrameBuffer, OSP_FB_COLOR);
@@ -364,6 +386,9 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
   }
 
   ++FrameNumber;
+
+
+  //--- Clean up the member variables that will dangle after the method ends.
 
 # define RESET(m_Size, m_Data)                                                 \
   do {                                                                         \
@@ -383,6 +408,10 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
 }
 
 char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Finalize() {
+
+
+  //--- Clean up OSPRay scene graph.
+
 # define RESET(m_Name)                                                         \
   do {                                                                         \
     ospRelease(m_Name);                                                        \
@@ -413,13 +442,16 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Finalize() {
 }
 
 
-//---
+//--- Public "New()" method is called once in the main function.
 
 OSPRayUnstructuredVolumeVisualization *OSPRayUnstructuredVolumeVisualization::New() {
   auto result = new OSPRayUnstructuredVolumeVisualization;
   result->InitializeObjectBase();
   return result;
 }
+
+
+//--- Public "Initialize()" method is called after setting config values.
 
 int OSPRayUnstructuredVolumeVisualization::Initialize() {
   this->Internals = new InternalsType;
@@ -436,10 +468,13 @@ int OSPRayUnstructuredVolumeVisualization::Initialize() {
   return /*failure=*/0;
 }
 
+
+//--- Public "Execute()" method called once per iteration.
+
 bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAdaptor) {
-  int rank, size;
-  MPI_Comm_rank(GetCommunicator(), &rank);
-  MPI_Comm_size(GetCommunicator(), &size);
+
+
+  //--- Extract vtkUnstructuredGrid from SENSEI DataAdaptor.
 
   vtkDataObject *mesh;
   if (dataAdaptor->GetMesh(MeshName.c_str(), /*structureOnly=*/false, mesh)) {
@@ -448,7 +483,7 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
   }
 
   if (dataAdaptor->AddArray(mesh, MeshName.c_str(), vtkDataObject::CELL, ArrayName.c_str())) {
-    SENSEI_ERROR("Failed to get array '" << ArrayName << "' from mesh '" << MeshName << "' block " << rank)//no semicolon
+    SENSEI_ERROR("Failed to add array '" << ArrayName << "' from mesh '" << MeshName)//no semicolon
     return /*success=*/false;
   }
 
@@ -482,8 +517,10 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
     SENSEI_ERROR("Expected data object from mesh '" << MeshName << "' to be a vtkUnstructuredGrid")//no semicolon
     return /*success=*/false;
   }
-
   unstructuredGrid->Register(this);
+
+
+  //--- Optionally redistribute the vtkUnstructuredGrid with D3 filter.
 
   if (UseD3) {
     MPI_Comm comm = GetCommunicator();
@@ -518,6 +555,9 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
     unstructuredGrid = UnstructuredGrid::SafeDownCast(filter->GetOutput());
     unstructuredGrid->Register(this);
   }
+
+
+  //--- Extract data from vtkUnstructuredGrid.
 
   this->Internals->SetCommunicator(GetCommunicator());
 
@@ -620,6 +660,9 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
       array->GetNumberOfTuples(), volumeIndex.data());
   }
 
+
+  //--- Defer execution to the "internal" object to render OSPRay scene.
+
   char const *error = this->Internals->Execute();
   if (error != nullptr) {
     std::fprintf(stderr, "Error: %s\n", error);
@@ -630,6 +673,9 @@ bool OSPRayUnstructuredVolumeVisualization::Execute(sensei::DataAdaptor *dataAda
 
   return /*success=*/true;
 }
+
+
+//--- Public "Finalize()" method called after simulation is finished.
 
 int OSPRayUnstructuredVolumeVisualization::Finalize() {
   char const *error = this->Internals->Finalize();

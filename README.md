@@ -1,39 +1,52 @@
-# Sensei Tests
+# OSPRay + SENSEI Integration
 
-This repository contains code to experiment with interfacing [SENSEI][] with
-[OSPRay Studio][] using simple simulations and datasets.
+This repository contains a library that adds [OSPRay][] scientific visualization
+support to the [SENSEI][] library. The primary goal of this library is to enable
+developers to easily integrate multiprocess simulations with multiprocess
+rendering using OSPRay's MPI module.
 
-Currently, one simulation and one dataset are planned:
-- N-Body Simulation, based on [mini-nbody][].
-- HACC data, based on the [Hardware/Hybrid Accelerated Cosmology Code][].
 
-The goal of this repository is to outlive being a "test" repository and provide
-an OSPRay / OSPRay Studio implementation of a SENSEI "Analysis Adapter." At that
-time, a SENSEI XML configuration file like the following could be expected to
-work:
+## Building
 
-```xml
-<sensei>
-  <!-- Description:
-    - analyse data from a mesh named "mesh" and the array within named "xyz";
-    - render it as a point cloud;
-    - visualize it in an interactive window.  -->
+This library expects to have MPICH, OSPRay, VTK, and SENSEI installed already
+and expects them to be findable via CMake's `find_package()` command.
 
-  <analysis
-    type="ospray_studio"
-    subtype="interactive"
-    mesh="mesh"
-    array="xyz"
-    association="point"
-    enabled="1" />
-</sensei>
+For convenience, a script at the root level helps manage the development
+environment this code expects. Running the following commands should yield a
+suitable development environment, however these commands aren't necessary. Any
+method of installing the required dependencies will work.
+
+```console
+$ # Download dependencies
+$ ./go.sh ospray git clone
+$ ./go.sh vtk git clone
+$ ./go.sh sensei git clone
+$
+$ # Setup Docker environment
+$ ./go.sh docker build
+$ ./go.sh docker start
+$
+$ # Build and install OSPRay
+$ ./go.sh -docker ospray cmake configure
+$ ./go.sh -docker ospray cmake parbuild
+$ ./go.sh -docker ospray cmake install
+$
+$ # Build and install VTK
+$ ./go.sh -docker -ospray vtk cmake configure
+$ ./go.sh -docker -ospray vtk cmake parbuild
+$ ./go.sh -docker -ospray vtk cmake install
+$
+$ # Build and install SENSEI
+$ ./go.sh -docker -ospray -vtk sensei cmake configure
+$ ./go.sh -docker -ospray -vtk sensei cmake parbuild
+$ ./go.sh -docker -ospray -vtk sensei cmake install
+$
+$ # Build and install this library
+$ ./go.sh -docker -ospray -vtk -sensei cmake configure
+$ ./go.sh -docker -ospray -vtk -sensei cmake build
+$ ./go.sh -docker -ospray -vtk -sensei cmake install
 ```
-
-This isn't set in stone.
-
 
 
 [SENSEI]: https://github.com/SENSEI-insitu/SENSEI
-[OSPRay Studio]: https://github.com/ospray/ospray_studio
-[mini-nbody]: https://github.com/harrism/mini-nbody
-[Hardware/Hybrid Accelerated Cosmology Code]: https://cpac.hep.anl.gov/projects/hacc/
+[OSPRay]: https://github.com/ospray/ospray
