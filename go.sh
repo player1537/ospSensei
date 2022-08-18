@@ -683,27 +683,17 @@ go-exec() {
 }
 
 go--nbody() {
-    go \
-    -docker \
-    -ospray \
-    -vtk \
-    -sensei \
-    exec \
-        mpirun \
-        -np 1 \
-        nbody
+    mpirun \
+    -np 1 \
+    nbody \
+        "$@"
 }
 
 go--mandelbrot() {
-    go \
-    -docker \
-    -ospray \
-    -vtk \
-    -sensei \
-    exec \
-        mpirun \
-        -np 1 \
-        mandelbrot
+    mpirun \
+    -np 1 \
+    mandelbrot \
+        "$@"
 }
 
 go--convert() {

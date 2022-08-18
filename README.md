@@ -48,5 +48,53 @@ $ ./go.sh -docker -ospray -vtk -sensei cmake install
 ```
 
 
+## Building: On Deadpool
+
+```console
+$ # Download dependencies
+$ ./go.sh ospray git clone
+$ ./go.sh vtk git clone
+$ ./go.sh sensei git clone
+$
+$ # Build and install OSPRay
+$ ./go.sh ospray cmake configure
+$ ./go.sh ospray cmake parbuild
+$ ./go.sh ospray cmake install
+$
+$ # Build and install VTK
+$ ./go.sh -ospray vtk cmake configure
+$ ./go.sh -ospray vtk cmake parbuild
+$ ./go.sh -ospray vtk cmake install
+$
+$ # Build and install SENSEI
+$ ./go.sh -ospray -vtk sensei cmake configure
+$ ./go.sh -ospray -vtk sensei cmake parbuild
+$ ./go.sh -ospray -vtk sensei cmake install
+$
+$ # Build and install this library
+$ ./go.sh -ospray -vtk -sensei cmake configure
+$ ./go.sh -ospray -vtk -sensei cmake build
+$ ./go.sh -ospray -vtk -sensei cmake install
+```
+
+**Testing**:
+
+```console
+$ # Run nbody example app
+$ rm -f ospSensei.*.ppm
+$ ./go.sh -ospray -vtk -sensei exec mpirun -np 1 nbody
+$ # Might segfault due to faulty MPI finalization
+$ ls ospSensei.*.ppm
+$ # Expect: 10 files
+$
+$ # Run mandelbrot example app
+$ rm -f ospSensei.*.ppm
+$ ./go.sh -ospray -vtk -sensei exec mpirun -np 1 mandelbrot
+$ # Might segfault due to faulty MPI finalization
+$ ls ospSensei.*.ppm
+$ # Expect: 1 file
+```
+
+
 [SENSEI]: https://github.com/SENSEI-insitu/SENSEI
 [OSPRay]: https://github.com/ospray/ospray
