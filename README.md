@@ -98,8 +98,8 @@ $ # Expect: 1 file
 ## Usage: Examples
 
 Two example apps are included within the repository. These are in
-[nbody.cpp][app/nbody/nbody.cpp] and
-[mandelbrot.cpp][app/mandelbrot/mandelbrot.cpp].
+[nbody.cpp](app/nbody/nbody.cpp) and
+[mandelbrot.cpp](app/mandelbrot/mandelbrot.cpp).
 
 In contrast with SENSEI, this library does not (yet) provide an equivalent to
 SENSEI's `ConfigurableAnalysis` that parses an XML file and changes the
