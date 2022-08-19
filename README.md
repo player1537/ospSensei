@@ -95,6 +95,95 @@ $ ls ospSensei.*.ppm
 $ # Expect: 1 file
 ```
 
+## Usage: Examples
+
+Two example apps are included within the repository. These are in
+[nbody.cpp][app/nbody/nbody.cpp] and
+[mandelbrot.cpp][app/mandelbrot/mandelbrot.cpp].
+
+In contrast with SENSEI, this library does not (yet) provide an equivalent to
+SENSEI's `ConfigurableAnalysis` that parses an XML file and changes the
+analysis/data adaptors at runtime. This means that the specific `ospSensei`
+class needs to be referenced directly.
+
+In the simplest case, the analysis adaptors are used as follows:
+
+```c++
+#include <vtkNew.h>
+#include <vtkPolyData.h>
+#include <VTKDataAdaptor.h>
+#include <ospSensei/OSPRayParticleVisualization.h>
+
+int main() {
+    // ...
+
+    using AnalysisAdaptor = ospSensei::OSPRayParticleVisualization;
+    vtkNew<AnalysisAdaptor> analysis;
+    analysis->SetCommunicator(MPI_COMM_WORLD);
+    analysis->SetMeshName("bodies");
+    analysis->SetArrayName("position");
+    analysis->SetWidth(512);
+    analysis->SetHeight(512);
+    analysis->Initialize();
+
+    for (size_t iter=0; iter<n_iters; ++iter) {
+        // ...
+
+        vtkNew<vtkPolyData> polyData;
+
+        using DataAdaptor = sensei::VTKDataAdaptork;
+        vtkNew<DataAdaptor> data;
+        data->SetDataObject("bodies", polyData);
+
+        analysis->Execute(data);
+
+        data->ReleaseData();
+    }
+
+    analysis->Finalize();
+
+    // ...
+}
+```
+
+```c++
+#include <vtkNew.h>
+#include <vtkUnstructuredGrid.h>
+#include <VTKDataAdaptor.h>
+#include <ospSensei/OSPRayUnstructuredVolumeVisualization.h>
+
+int main() {
+    // ...
+
+    using AnalysisAdaptor = ospSensei::OSPRayUnstructuredVolumeVisualization;
+    vtkNew<AnalysisAdaptor> analysis;
+    analysis->SetCommunicator(MPI_COMM_WORLD);
+    analysis->SetMeshName("mandelbrot");
+    analysis->SetArrayName("nsteps");
+    analysis->SetWidth(512);
+    analysis->SetHeight(512);
+    analysis->Initialize();
+
+    for (size_t iter=0; iter<n_iters; ++iter) {
+        // ...
+
+        vtkNew<vtkUnstructuredGrid> ugrid;
+
+        using DataAdaptor = sensei::VTKDataAdaptor;
+        vtkNew<DataAdaptor> data;
+        data->SetDataObject("mandelbrot", ugrid);
+
+        analysis->SetUseD3(true); // or false
+        analysis->Execute(data);
+
+        data->ReleaseData();
+    }
+
+    analysis->Finalize();
+
+    // ...
+```
+
 
 [SENSEI]: https://github.com/SENSEI-insitu/SENSEI
 [OSPRay]: https://github.com/ospray/ospray
