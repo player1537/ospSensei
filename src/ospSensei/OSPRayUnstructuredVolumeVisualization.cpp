@@ -25,12 +25,14 @@
 #include <vtkDoubleArray.h>
 #include <vtkFloatArray.h>
 #include <vtkIdTypeArray.h>
+#include <vtkImageData.h>
 #include <vtkMPI.h>
 #include <vtkMPICommunicator.h>
 #include <vtkMPIController.h>
 #include <vtkMultiBlockDataSet.h>
 #include <vtkPDistributedDataFilter.h>
 #include <vtkPKdTree.h>
+#include <vtkPNGWriter.h>
 #include <vtkPointData.h>
 #include <vtkPolyData.h>
 #include <vtkUnsignedCharArray.h>
@@ -41,34 +43,6 @@
 //---
 
 namespace ospSensei {
-
-
-//---
-
-// helper function to write the rendered image as PPM file
-static void writePPM(const char *fileName, int size_x, int size_y, const uint32_t *pixel) {
-  using namespace std;
-
-  FILE *file = fopen(fileName, "wb");
-  if (!file) {
-    fprintf(stderr, "fopen('%s', 'wb') failed: %d", fileName, errno);
-    return;
-  }
-  fprintf(file, "P6\n%i %i\n255\n", size_x, size_y);
-  unsigned char *out = (unsigned char *)alloca(3 * size_x);
-  for (int y = 0; y < size_y; y++) {
-    const unsigned char *in =
-        (const unsigned char *)&pixel[(size_y - 1 - y) * size_x];
-    for (int x = 0; x < size_x; x++) {
-      out[3 * x + 0] = in[4 * x + 0];
-      out[3 * x + 1] = in[4 * x + 1];
-      out[3 * x + 2] = in[4 * x + 2];
-    }
-    fwrite(out, 3 * size_x, sizeof(char), file);
-  }
-  fprintf(file, "\n");
-  fclose(file);
-}
 
 
 //--- "InternalsType" manages OSPRay API.
@@ -83,11 +57,15 @@ private:
   MPI_Comm Communicator;
   int Width;
   int Height;
+  std::string FilePattern;
+  vtkNew<vtkPNGWriter> ImageWriter;
+  vtkNew<vtkImageData> ImageData;
 
 public:
   vtkSetMacro(Communicator, MPI_Comm);
   vtkSetMacro(Width, int);
   vtkSetMacro(Height, int);
+  vtkSetMacro(FilePattern, const char *);
 
 
   //--- Initialize()...
@@ -146,7 +124,6 @@ public:
 
   //--- Execute()...
 private:
-  int FrameNumber{0};
   OSPDevice Device{nullptr};
   OSPData VolumeVertexPositionData{nullptr};
   OSPData VolumeIndexData{nullptr};
@@ -187,6 +164,12 @@ public:
 vtkStandardNewMacro(OSPRayUnstructuredVolumeVisualization::InternalsType);
 
 char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Initialize() {
+  ImageData->SetExtent(0, Width-1, 0, Height-1, 0, 0);
+  ImageData->AllocateScalars(VTK_UNSIGNED_CHAR, 4);
+
+  ImageWriter->SetFilePattern(FilePattern.c_str());
+  ImageWriter->SetInputData(ImageData);
+
   int rank, size;
   MPI_Comm_rank(Communicator, &rank);
   MPI_Comm_size(Communicator, &size);
@@ -379,13 +362,14 @@ char const *OSPRayUnstructuredVolumeVisualization::InternalsType::Execute() {
   //--- Output renderered framebuffer to disk.
 
   if (rank == 0) {
-    std::string filename = std::string("ospSensei.") + std::to_string(FrameNumber) + std::string(".ppm");
-    const void *fb = ospMapFrameBuffer(FrameBuffer, OSP_FB_COLOR);
-    writePPM(filename.c_str(), Width, Height, static_cast<const uint32_t *>(fb));
-    ospUnmapFrameBuffer(fb, FrameBuffer);
-  }
+    void *dst = ImageData->GetScalarPointer();
+    const void *src = ospMapFrameBuffer(FrameBuffer, OSP_FB_COLOR);
+    memcpy(dst, src, 4UL * Width * Height);
+    ospUnmapFrameBuffer(src, FrameBuffer);
+    ImageData->Modified();
 
-  ++FrameNumber;
+    ImageWriter->Write();
+  }
 
 
   //--- Clean up the member variables that will dangle after the method ends.
@@ -458,6 +442,7 @@ int OSPRayUnstructuredVolumeVisualization::Initialize() {
   this->Internals->SetCommunicator(this->GetCommunicator());
   this->Internals->SetWidth(this->Width);
   this->Internals->SetHeight(this->Height);
+  this->Internals->SetFilePattern(this->FilePattern.c_str());
 
   char const *error = this->Internals->Initialize();
   if (error != nullptr) {

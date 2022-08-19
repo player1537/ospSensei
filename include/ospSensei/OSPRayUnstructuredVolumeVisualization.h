@@ -30,6 +30,7 @@ private:
   int Height;
   std::string MeshName;
   std::string ArrayName;
+  std::string FilePattern = "ospSensei.%d.png";
 
 public:
   virtual void SetWidth(int _arg) {
@@ -46,6 +47,10 @@ public:
 
   virtual void SetArrayName(const char *_arg) {
     this->ArrayName = _arg;
+  }
+
+  virtual void SetFilePattern(const char *_arg) {
+    this->FilePattern = _arg;
   }
 
 
